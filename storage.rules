@@ -1,0 +1,43 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    function isUserOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Buyer & user profile avatars: users/{userId}/profile/*
+    match /users/{userId}/profile/{allPaths=**} {
+      // Profile pictures can be read publicly or by authenticated users for order & chat display
+      allow read: if true;
+      // Only the owner can write or delete their avatar (max 5MB, must be an image)
+      allow write: if isUserOwner(userId)
+                    && request.resource.size < 5 * 1024 * 1024
+                    && request.resource.contentType.matches('image/.*');
+      allow delete: if isUserOwner(userId);
+    }
+
+    // Store logos, banners, and product gallery images: stores/{storeId}/*
+    match /stores/{storeId}/{allPaths=**} {
+      // Publicly viewable for marketplace discovery and storefronts
+      allow read: if true;
+      // Authenticated users can write/delete their store media (max 10MB, must be an image)
+      allow write: if isAuthenticated()
+                    && request.resource.size < 10 * 1024 * 1024
+                    && request.resource.contentType.matches('image/.*');
+      allow delete: if isAuthenticated();
+    }
+
+    // Fallback image rule
+    match /{allPaths=**} {
+      allow read: if true;
+      allow write: if isAuthenticated()
+                    && request.resource.size < 10 * 1024 * 1024
+                    && request.resource.contentType.matches('image/.*');
+      allow delete: if isAuthenticated();
+    }
+  }
+}

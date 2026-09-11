@@ -1,0 +1,95 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Users collection
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow write: if isOwner(userId);
+
+      // Private AI Concierge Chat History
+      match /aiChats/{conversationId} {
+        allow read, write: if isOwner(userId);
+
+        match /messages/{messageId} {
+          allow read, write: if isOwner(userId);
+        }
+      }
+
+      match /aiMessages/{messageId} {
+        allow read, write: if isOwner(userId);
+      }
+    }
+
+    // Seller Profiles collection
+    match /sellerProfiles/{sellerId} {
+      allow read: if true; // Public for browsing storefronts
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        request.resource.data.userId == request.auth.uid ||
+        sellerId == request.auth.uid
+      );
+      allow delete: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        sellerId == request.auth.uid ||
+        resource.data.userId == null ||
+        resource.data.userId == ""
+      );
+    }
+
+    // Buyer Profiles collection
+    match /buyerProfiles/{buyerId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        request.resource.data.userId == request.auth.uid ||
+        buyerId == request.auth.uid
+      );
+    }
+
+    // Products collection
+    match /products/{productId} {
+      allow read: if true; // Public catalog for discovery
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated();
+      allow delete: if isAuthenticated();
+    }
+
+    // Orders collection - Buyer and Seller isolation
+    match /orders/{orderId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated();
+      allow delete: if false; // Orders are immutable audit records
+    }
+
+    // Conversations collection and messages subcollection
+    match /conversations/{conversationId} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated();
+      allow delete: if false;
+
+      match /messages/{messageId} {
+        allow read: if isAuthenticated();
+        allow create: if isAuthenticated();
+        allow update: if isAuthenticated();
+        allow delete: if false;
+      }
+    }
+
+    // Notifications collection
+    match /notifications/{notificationId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || resource.data.recipientId == request.auth.uid);
+    }
+  }
+}

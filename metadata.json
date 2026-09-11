@@ -1,0 +1,6 @@
+{
+  "name": "LocalCart AI - Local Business Marketplace",
+  "description": "Local-first marketplace connecting independent sellers with neighborhood buyers with digital Business Rooms, order management, and AI assistance.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

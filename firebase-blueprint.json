@@ -1,0 +1,190 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile with role, contact, and preferences",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Google UID" },
+        "email": { "type": "string", "format": "email", "description": "Email address" },
+        "displayName": { "type": "string", "description": "User full display name" },
+        "photoURL": { "type": "string", "description": "Avatar photo URL" },
+        "role": { "type": "string", "enum": ["buyer", "seller", "unassigned"], "description": "User system role" },
+        "phone": { "type": "string", "description": "Phone number" },
+        "createdAt": { "type": "string", "description": "ISO timestamp" },
+        "updatedAt": { "type": "string", "description": "ISO timestamp" }
+      },
+      "required": ["uid", "email", "displayName", "role", "createdAt", "updatedAt"]
+    },
+    "SellerProfile": {
+      "title": "SellerProfile",
+      "description": "Artisan atelier storefront configuration and details",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Seller profile ID" },
+        "userId": { "type": "string", "description": "Owning User UID" },
+        "businessName": { "type": "string", "description": "Storefront or atelier brand name" },
+        "businessSlug": { "type": "string", "description": "Unique URL identifier" },
+        "businessCategory": { "type": "string", "description": "Category domain" },
+        "businessDescription": { "type": "string", "description": "Description of atelier" },
+        "tagline": { "type": "string", "description": "Short branding quote" },
+        "rating": { "type": "number", "description": "Aggregate customer rating" },
+        "reviewCount": { "type": "number", "description": "Total reviews count" },
+        "serviceRadiusKm": { "type": "number", "description": "Delivery radius" },
+        "bannerUrl": { "type": "string", "description": "Storefront banner image" },
+        "logoUrl": { "type": "string", "description": "Storefront logo image" },
+        "openingHours": { "type": "string", "description": "Operating hours" },
+        "contactPhone": { "type": "string", "description": "Business phone" },
+        "contactEmail": { "type": "string", "format": "email", "description": "Business email" },
+        "isVerified": { "type": "boolean", "description": "Verification status" },
+        "createdAt": { "type": "string", "description": "ISO timestamp" }
+      },
+      "required": ["id", "userId", "businessName", "businessSlug", "businessCategory"]
+    },
+    "BuyerProfile": {
+      "title": "BuyerProfile",
+      "description": "Patron buyer preferences and saved ateliers",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Buyer ID" },
+        "userId": { "type": "string", "description": "Owning User UID" },
+        "fullName": { "type": "string", "description": "Full name" },
+        "email": { "type": "string", "format": "email", "description": "Email address" },
+        "phone": { "type": "string", "description": "Contact number" },
+        "createdAt": { "type": "string", "description": "ISO timestamp" }
+      },
+      "required": ["id", "userId", "fullName", "email"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Artisan product listed in Business Room catalog",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Product ID" },
+        "sellerId": { "type": "string", "description": "Seller profile ID" },
+        "businessName": { "type": "string", "description": "Seller business name" },
+        "name": { "type": "string", "description": "Product title" },
+        "description": { "type": "string", "description": "Product description" },
+        "category": { "type": "string", "description": "Category" },
+        "originalPrice": { "type": "number", "description": "Base price" },
+        "discountPercent": { "type": "number", "description": "Discount percentage" },
+        "finalPrice": { "type": "number", "description": "Price after discount" },
+        "stockQuantity": { "type": "number", "description": "Available units" },
+        "inStock": { "type": "boolean", "description": "Availability state" },
+        "imageUrl": { "type": "string", "description": "Image link" },
+        "preparationTime": { "type": "string", "description": "Preparation timeframe" },
+        "createdAt": { "type": "string", "description": "ISO timestamp" },
+        "updatedAt": { "type": "string", "description": "ISO timestamp" }
+      },
+      "required": ["id", "sellerId", "businessName", "name", "category", "originalPrice", "finalPrice"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "Order commission between buyer and seller with immutable locked snapshot",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Order ID" },
+        "orderNumber": { "type": "string", "description": "Human readable order number" },
+        "buyerId": { "type": "string", "description": "Buyer user ID" },
+        "buyerName": { "type": "string", "description": "Buyer name" },
+        "buyerPhone": { "type": "string", "description": "Buyer phone" },
+        "sellerId": { "type": "string", "description": "Seller profile ID" },
+        "sellerBusinessName": { "type": "string", "description": "Seller business name" },
+        "subtotal": { "type": "number", "description": "Items subtotal" },
+        "deliveryFee": { "type": "number", "description": "Delivery fee" },
+        "discountTotal": { "type": "number", "description": "Total discount" },
+        "total": { "type": "number", "description": "Final locked total" },
+        "status": {
+          "type": "string",
+          "enum": [
+            "CONFIRMED",
+            "PENDING_SELLER_APPROVAL",
+            "ACCEPTED",
+            "PREPARING",
+            "READY",
+            "READY_FOR_DELIVERY",
+            "OUT_FOR_DELIVERY",
+            "DELIVERED",
+            "REJECTED",
+            "CANCELLED"
+          ],
+          "description": "Current lifecycle status"
+        },
+        "isBillLocked": { "type": "boolean", "description": "Whether financial snapshot is locked" },
+        "lockedAt": { "type": "string", "description": "ISO timestamp when locked" },
+        "expectedDeliveryDate": { "type": "string", "description": "Delivery estimated date" },
+        "deliveryMethod": { "type": "string", "description": "Delivery method" },
+        "rejectionReason": { "type": "string", "description": "Rejection explanation" },
+        "customerNotes": { "type": "string", "description": "Customer commission notes" },
+        "sellerNotes": { "type": "string", "description": "Seller notes" },
+        "createdAt": { "type": "string", "description": "ISO timestamp" },
+        "updatedAt": { "type": "string", "description": "ISO timestamp" }
+      },
+      "required": ["id", "orderNumber", "buyerId", "buyerName", "sellerId", "sellerBusinessName", "subtotal", "deliveryFee", "total", "status", "isBillLocked", "createdAt", "updatedAt"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "In-app status notification",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Notification ID" },
+        "userId": { "type": "string", "description": "Target recipient UID" },
+        "orderId": { "type": "string", "description": "Related order ID" },
+        "title": { "type": "string", "description": "Notification headline" },
+        "message": { "type": "string", "description": "Notification text" },
+        "read": { "type": "boolean", "description": "Read status" },
+        "createdAt": { "type": "string", "description": "ISO timestamp" }
+      },
+      "required": ["id", "userId", "title", "message", "read", "createdAt"]
+    },
+    "AIChatMessage": {
+      "title": "AIChatMessage",
+      "description": "User private AI Concierge conversation message",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Message ID" },
+        "userId": { "type": "string", "description": "Firebase UID of user" },
+        "role": { "type": "string", "enum": ["user", "ai", "assistant"], "description": "Sender role" },
+        "text": { "type": "string", "description": "Message content" },
+        "matchedProducts": { "type": "array", "description": "List of catalog products returned by AI" },
+        "sellerTips": { "type": "array", "description": "Dynamic suggested prompt chips" },
+        "createdAt": { "type": "string", "description": "ISO timestamp" }
+      },
+      "required": ["id", "userId", "role", "text", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User account document"
+    },
+    "/users/{userId}/aiChats/{conversationId}/messages/{messageId}": {
+      "schema": "AIChatMessage",
+      "description": "User private AI conversation message"
+    },
+    "/users/{userId}/aiMessages/{messageId}": {
+      "schema": "AIChatMessage",
+      "description": "User private AI concierge message"
+    },
+    "/sellerProfiles/{sellerId}": {
+      "schema": "SellerProfile",
+      "description": "Artisan atelier profiles"
+    },
+    "/buyerProfiles/{buyerId}": {
+      "schema": "BuyerProfile",
+      "description": "Buyer patron profiles"
+    },
+    "/products/{productId}": {
+      "schema": "Product",
+      "description": "Product catalog entries"
+    },
+    "/orders/{orderId}": {
+      "schema": "Order",
+      "description": "Commissions and orders"
+    },
+    "/notifications/{notificationId}": {
+      "schema": "Notification",
+      "description": "User in-app notifications"
+    }
+  }
+}
