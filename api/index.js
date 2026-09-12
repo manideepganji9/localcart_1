@@ -685,14 +685,7 @@ function computeDeterministicAnswer(userQuery, products, orders, metrics, seller
     return `I'm here to help you manage ${sellerProfile?.businessName || "your store"}. You can ask about your products, inventory levels, orders, or sales performance.`;
   }
   const qLower = userQuery.toLowerCase();
-  if (qLower.includes("what product") || qLower.includes("my product") || qLower.includes("which product") || qLower.includes("list product") || qLower === "products" || qLower === "all products" || qLower.includes("show my product") || qLower.includes("show products")) {
-    if (products.length === 0) {
-      return `You currently have no products listed in ${sellerProfile?.businessName || "your store"}. You can add new products from your inventory dashboard.`;
-    } else {
-      return `Here are the products currently listed in ${sellerProfile?.businessName || "your store"} (${products.length} total):
-` + products.map((p) => `\u2022 ${p.name}: \u20B9${p.finalPrice} (${p.stockQuantity} in stock${p.inStock ? "" : " - Out of Stock"})`).join("\n");
-    }
-  } else if (qLower.includes("low in stock") || qLower.includes("low stock") || qLower.includes("restock") || qLower.includes("running out")) {
+  if (qLower.includes("low in stock") || qLower.includes("low stock") || qLower.includes("restock") || qLower.includes("running out")) {
     if (metrics.lowStock.length > 0) {
       return `You have ${metrics.lowStock.length} product(s) running low in stock (5 or fewer units remaining):
 ` + metrics.lowStock.map((p) => `\u2022 ${p.name}: ${p.stockQuantity} remaining (\u20B9${p.finalPrice})`).join("\n") + `
@@ -703,6 +696,13 @@ We recommend restocking these soon to avoid missing incoming customer orders.`;
 ` + metrics.outOfStock.map((p) => `\u2022 ${p.name}`).join("\n");
     } else {
       return `All ${products.length} products in your store currently have healthy stock levels above 5 units. No urgent restocking is needed.`;
+    }
+  } else if (qLower.includes("what product") || qLower.includes("my product") || qLower.includes("which product") || qLower.includes("list product") || qLower === "products" || qLower === "all products" || qLower.includes("show my product") || qLower.includes("show products")) {
+    if (products.length === 0) {
+      return `You currently have no products listed in ${sellerProfile?.businessName || "your store"}. You can add new products from your inventory dashboard.`;
+    } else {
+      return `Here are the products currently listed in ${sellerProfile?.businessName || "your store"} (${products.length} total):
+` + products.map((p) => `\u2022 ${p.name}: \u20B9${p.finalPrice} (${p.stockQuantity} in stock${p.inStock ? "" : " - Out of Stock"})`).join("\n");
     }
   } else if (qLower.includes("highest stock") || qLower.includes("most stock")) {
     if (metrics.highestStock) {

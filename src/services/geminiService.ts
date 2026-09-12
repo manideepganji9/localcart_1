@@ -484,20 +484,20 @@ export async function askSellerAIAssistant(params: {
   }
 
   let message = '';
-  if (qLower.includes('what product') || qLower.includes('my product') || qLower.includes('which product') || qLower.includes('list product') || qLower === 'products' || qLower === 'all products') {
-    if (products.length === 0) {
-      message = `You currently have no products listed in ${sellerProfile.businessName}. You can add new products from your inventory dashboard.`;
-    } else {
-      message = `Here are the products currently listed in ${sellerProfile.businessName} (${products.length} total):\n` +
-        products.map(p => `• ${p.name}: ₹${p.finalPrice} (${p.stockQuantity} in stock${p.inStock ? '' : ' - Out of Stock'})`).join('\n');
-    }
-  } else if (qLower.includes('low in stock') || qLower.includes('low stock') || qLower.includes('restock') || qLower.includes('running out')) {
+  if (qLower.includes('low in stock') || qLower.includes('low stock') || qLower.includes('restock') || qLower.includes('running out')) {
     if (lowStock.length > 0) {
       message = `You have ${lowStock.length} product(s) with low stock (5 or fewer units remaining):\n` +
         lowStock.map(p => `• ${p.name}: ${p.stockQuantity} in stock (₹${p.finalPrice})`).join('\n') +
         `\n\nRestock soon to ensure uninterrupted sales.`;
     } else {
       message = `All ${products.length} products in your store have healthy stock levels above 5 units.`;
+    }
+  } else if (qLower.includes('what product') || qLower.includes('my product') || qLower.includes('which product') || qLower.includes('list product') || qLower === 'products' || qLower === 'all products') {
+    if (products.length === 0) {
+      message = `You currently have no products listed in ${sellerProfile.businessName}. You can add new products from your inventory dashboard.`;
+    } else {
+      message = `Here are the products currently listed in ${sellerProfile.businessName} (${products.length} total):\n` +
+        products.map(p => `• ${p.name}: ₹${p.finalPrice} (${p.stockQuantity} in stock${p.inStock ? '' : ' - Out of Stock'})`).join('\n');
     }
   } else if (qLower.includes('selling the most') || qLower.includes('best-selling') || qLower.includes('top product')) {
     if (topSales.length === 0) {

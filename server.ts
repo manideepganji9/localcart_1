@@ -745,14 +745,7 @@ function computeDeterministicAnswer(
   }
 
   const qLower = userQuery.toLowerCase();
-  if (qLower.includes('what product') || qLower.includes('my product') || qLower.includes('which product') || qLower.includes('list product') || qLower === 'products' || qLower === 'all products' || qLower.includes('show my product') || qLower.includes('show products')) {
-    if (products.length === 0) {
-      return `You currently have no products listed in ${sellerProfile?.businessName || 'your store'}. You can add new products from your inventory dashboard.`;
-    } else {
-      return `Here are the products currently listed in ${sellerProfile?.businessName || 'your store'} (${products.length} total):\n` +
-        products.map(p => `• ${p.name}: ₹${p.finalPrice} (${p.stockQuantity} in stock${p.inStock ? '' : ' - Out of Stock'})`).join('\n');
-    }
-  } else if (qLower.includes('low in stock') || qLower.includes('low stock') || qLower.includes('restock') || qLower.includes('running out')) {
+  if (qLower.includes('low in stock') || qLower.includes('low stock') || qLower.includes('restock') || qLower.includes('running out')) {
     if (metrics.lowStock.length > 0) {
       return `You have ${metrics.lowStock.length} product(s) running low in stock (5 or fewer units remaining):\n` +
         metrics.lowStock.map(p => `• ${p.name}: ${p.stockQuantity} remaining (₹${p.finalPrice})`).join('\n') +
@@ -762,6 +755,13 @@ function computeDeterministicAnswer(
         metrics.outOfStock.map(p => `• ${p.name}`).join('\n');
     } else {
       return `All ${products.length} products in your store currently have healthy stock levels above 5 units. No urgent restocking is needed.`;
+    }
+  } else if (qLower.includes('what product') || qLower.includes('my product') || qLower.includes('which product') || qLower.includes('list product') || qLower === 'products' || qLower === 'all products' || qLower.includes('show my product') || qLower.includes('show products')) {
+    if (products.length === 0) {
+      return `You currently have no products listed in ${sellerProfile?.businessName || 'your store'}. You can add new products from your inventory dashboard.`;
+    } else {
+      return `Here are the products currently listed in ${sellerProfile?.businessName || 'your store'} (${products.length} total):\n` +
+        products.map(p => `• ${p.name}: ₹${p.finalPrice} (${p.stockQuantity} in stock${p.inStock ? '' : ' - Out of Stock'})`).join('\n');
     }
   } else if (qLower.includes('highest stock') || qLower.includes('most stock')) {
     if (metrics.highestStock) {
