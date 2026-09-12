@@ -16,6 +16,7 @@ import {
   X,
   MapPin,
 } from 'lucide-react';
+import { DEFAULT_STORE_PHOTO } from '../../services/imageStorageService';
 
 interface SellerLayoutProps {
   currentTab: string;
@@ -83,7 +84,7 @@ export const SellerLayout: React.FC<SellerLayoutProps> = ({
           <div className="p-5 border-b border-[#FFFFFF12]">
             <div className="flex items-center gap-3">
               <img
-                src={sellerProfile?.storePhotoUrl || sellerProfile?.logoUrl || 'https://images.unsplash.com/photo-1578985545062-69928b1d9587?auto=format&fit=crop&w=150&q=80'}
+                src={sellerProfile?.storePhotoUrl || sellerProfile?.logoUrl || DEFAULT_STORE_PHOTO}
                 alt={sellerProfile?.businessName}
                 className="w-11 h-11 object-cover border border-[#FFFFFF20] bg-[#161616]"
               />

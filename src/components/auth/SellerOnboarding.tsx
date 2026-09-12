@@ -5,7 +5,7 @@ import { extractSellerOnboardingInfo } from '../../services/geminiService';
 import { LocationPicker } from '../common/LocationPicker';
 import { PRODUCT_CATEGORIES, BUSINESS_TYPES, APP_CONFIG } from '../../constants/config';
 import { LocationInfo } from '../../types';
-import { DEFAULT_STORE_PHOTO, DEFAULT_STORE_BANNER } from '../../services/imageStorageService';
+import { DEFAULT_STORE_PHOTO, DEFAULT_STORE_BANNER, DEFAULT_AVATAR } from '../../services/imageStorageService';
 import {
   Sparkles,
   Store,
@@ -29,14 +29,14 @@ export const SellerOnboarding: React.FC<SellerOnboardingProps> = ({ onComplete }
   const { createSellerProfile } = useStore();
 
   // Step 1: Freeform input
-  const [productsText, setProductsText] = useState('I make homemade chocolate cakes, red velvet cupcakes, and fudgy brownies');
-  const [businessTypeText, setBusinessTypeText] = useState('Home Bakery / Cloud Kitchen');
+  const [productsText, setProductsText] = useState('');
+  const [businessTypeText, setBusinessTypeText] = useState(BUSINESS_TYPES[0] || 'Local Retail Store');
   const [isExtracting, setIsExtracting] = useState(false);
   const [aiExtracted, setAiExtracted] = useState(false);
 
   // Step 2: Structured business fields
   const [businessName, setBusinessName] = useState('');
-  const [businessCategory, setBusinessCategory] = useState('Bakery & Desserts');
+  const [businessCategory, setBusinessCategory] = useState('');
   const [tagline, setTagline] = useState('');
   const [businessDescription, setBusinessDescription] = useState('');
   const [serviceRadiusKm, setServiceRadiusKm] = useState(15);
@@ -78,7 +78,7 @@ export const SellerOnboarding: React.FC<SellerOnboardingProps> = ({ onComplete }
       } else if (productsText) {
         setBusinessCategory(productsText.slice(0, 50));
       }
-      setTagline(extracted.tagline || 'Fresh quality goods for neighborhood celebrations');
+      setTagline(extracted.tagline || 'Quality products delivered locally');
       setBusinessDescription(extracted.businessDescription || productsText);
       setAiExtracted(true);
       setStep(2);
@@ -100,8 +100,8 @@ export const SellerOnboarding: React.FC<SellerOnboardingProps> = ({ onComplete }
     if (!businessDescription) {
       setBusinessDescription(productsText || 'Local store serving quality goods.');
     }
-    if (!businessCategory) {
-      setBusinessCategory(productsText ? productsText.slice(0, 50) : 'Homemade Cakes & Desserts');
+    if (!businessCategory && productsText) {
+      setBusinessCategory(productsText.slice(0, 50));
     }
     setStep(2);
   };
@@ -118,19 +118,21 @@ export const SellerOnboarding: React.FC<SellerOnboardingProps> = ({ onComplete }
     // Save location to user document too
     updateUserLocation(location);
 
+    const cleanCategory = businessCategory.trim() || productsText.trim().slice(0, 50) || 'General Store';
+
     createSellerProfile({
       userId: currentUser.id,
       businessName: businessName || `${currentUser.fullName}'s Store`,
       businessSlug: `${slug}-${Date.now().toString().slice(-4)}`,
-      businessCategory: businessCategory || 'Homemade Cakes & Desserts',
-      whatYouSell: businessCategory || 'Homemade Cakes & Desserts',
-      businessDescription: businessDescription || productsText,
+      businessCategory: cleanCategory,
+      whatYouSell: cleanCategory,
+      businessDescription: businessDescription || productsText || 'Local neighborhood storefront.',
       tagline: tagline || 'Quality products for local customers',
       location,
       serviceRadiusKm,
-      bannerUrl: DEFAULT_STORE_BANNER,
-      storePhotoUrl: DEFAULT_STORE_PHOTO,
-      logoUrl: DEFAULT_STORE_PHOTO,
+      bannerUrl: '',
+      storePhotoUrl: '',
+      logoUrl: currentUser.avatarUrl || DEFAULT_AVATAR,
       openingHours: '10:00 AM - 8:30 PM (Daily)',
       deliveryOptions: {
         sellerDelivery: deliveryModes.sellerDelivery,
@@ -142,7 +144,7 @@ export const SellerOnboarding: React.FC<SellerOnboardingProps> = ({ onComplete }
       },
       contactPhone: contactPhone || currentUser.phone || '',
       contactEmail: currentUser.email,
-      tags: ['Local Store', 'Verified', (businessCategory || '').toLowerCase()],
+      tags: ['Local Store', 'Verified', cleanCategory.toLowerCase()],
     });
 
     onComplete();
@@ -188,7 +190,7 @@ export const SellerOnboarding: React.FC<SellerOnboardingProps> = ({ onComplete }
                 rows={3}
                 value={productsText}
                 onChange={e => setProductsText(e.target.value)}
-                placeholder="Example: I make fresh sourdough bread, croissants, chocolate cupcakes, and fruit tarts..."
+                placeholder="Example: Handcrafted silver jewellery, resin art, ethnic kurtis, organic spices, or baked desserts..."
                 className="w-full p-3.5 bg-white border border-stone-300 rounded-xl text-xs sm:text-sm text-stone-900 placeholder:text-stone-400 focus:outline-none focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600"
               />
             </div>
@@ -257,7 +259,7 @@ export const SellerOnboarding: React.FC<SellerOnboardingProps> = ({ onComplete }
                   type="text"
                   value={businessName}
                   onChange={e => setBusinessName(e.target.value)}
-                  placeholder="e.g. Maya's Local Bakes"
+                  placeholder="e.g. Priya's Boutique or Indiranagar Crafts"
                   className="w-full px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-xs sm:text-sm text-stone-900 focus:outline-none focus:border-emerald-600"
                   required
                 />
@@ -271,7 +273,7 @@ export const SellerOnboarding: React.FC<SellerOnboardingProps> = ({ onComplete }
                   type="text"
                   value={businessCategory}
                   onChange={e => setBusinessCategory(e.target.value)}
-                  placeholder="e.g. Homemade Cakes, Cupcakes & Desserts"
+                  placeholder="e.g. Sarees & Ethnic Wear, Handmade Jewelry, or Fresh Cakes"
                   className="w-full px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-xs sm:text-sm text-stone-900 focus:outline-none focus:border-emerald-600"
                   required
                 />

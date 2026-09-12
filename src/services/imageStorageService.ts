@@ -250,13 +250,13 @@ export async function uploadImageToStorage(
               } catch {}
             }
             cleanup();
-            reject(new Error('Image upload was cancelled.'));
+            reject(new Error('Image upload was cancelled by user.'));
           }
         };
       }
 
-      // Safety timeout (15 seconds) so upload never hangs indefinitely
-      timeoutTimer = setTimeout(async () => {
+      // 45-second timeout guard for slow mobile uploads
+      timeoutTimer = setTimeout(() => {
         if (!isSettled && !userCancelled) {
           if (uploadTask) {
             try {
@@ -264,18 +264,9 @@ export async function uploadImageToStorage(
             } catch {}
           }
           cleanup();
-          try {
-            const dataUrl = await blobToDataUrl(blob);
-            onProgress?.(100);
-            resolve({
-              downloadUrl: dataUrl,
-              storagePath: storagePath || `data_${Date.now()}`,
-            });
-          } catch {
-            reject(new Error('Upload timed out. Please check your connection and try again.'));
-          }
+          reject(new Error('Image upload timed out. Please check your network connection and try again.'));
         }
-      }, 15000);
+      }, 45000);
 
       // Monitor progress, state changes, errors, and completion
       uploadTask.on(
@@ -287,29 +278,18 @@ export async function uploadImageToStorage(
             onProgress?.(percent);
           }
         },
-        async (error: any) => {
+        (error: any) => {
           if (isSettled) return;
           cleanup();
 
-          // If the user intentionally triggered cancellation via cancelRef
           if (userCancelled) {
             reject(new Error('Image upload was cancelled.'));
             return;
           }
 
-          // If Firebase Storage failed or was canceled by network/CORS/404 bucket missing,
-          // gracefully fall back to the optimized WebP/JPEG data URL so the user's photo is saved seamlessly!
-          console.warn('Firebase Storage upload dropped or bucket unavailable, falling back to optimized inline format:', error);
-          try {
-            const dataUrl = await blobToDataUrl(blob);
-            onProgress?.(100);
-            resolve({
-              downloadUrl: dataUrl,
-              storagePath: storagePath || `data_${Date.now()}`,
-            });
-          } catch (dataErr: any) {
-            reject(new Error(`Failed to process image: ${dataErr?.message || error?.message || 'Storage error'}`));
-          }
+          console.error('Firebase Storage upload failed:', error);
+          const errorMsg = error?.message || 'Storage upload failed';
+          reject(new Error(`Failed to upload image to Firebase Storage: ${errorMsg}`));
         },
         async () => {
           if (isSettled) return;
@@ -323,16 +303,8 @@ export async function uploadImageToStorage(
             });
           } catch (urlErr: any) {
             cleanup();
-            console.warn('Failed to retrieve storage download URL, using optimized inline format:', urlErr);
-            try {
-              const dataUrl = await blobToDataUrl(blob);
-              resolve({
-                downloadUrl: dataUrl,
-                storagePath,
-              });
-            } catch (fallbackErr: any) {
-              reject(new Error(`Failed to retrieve uploaded image URL: ${fallbackErr?.message || urlErr?.message || fallbackErr}`));
-            }
+            console.error('Failed to retrieve storage download URL:', urlErr);
+            reject(new Error(`Failed to retrieve uploaded image URL from Firebase Storage: ${urlErr?.message || urlErr}`));
           }
         }
       );
@@ -342,18 +314,8 @@ export async function uploadImageToStorage(
         reject(new Error('Image upload was cancelled.'));
         return;
       }
-      console.warn('Failed to initiate Firebase Storage upload, falling back to optimized inline format:', err);
-      blobToDataUrl(blob)
-        .then((dataUrl) => {
-          onProgress?.(100);
-          resolve({
-            downloadUrl: dataUrl,
-            storagePath: storagePath || `data_${Date.now()}`,
-          });
-        })
-        .catch((dataErr) => {
-          reject(new Error(`Failed to initiate image upload: ${err?.message || dataErr?.message}`));
-        });
+      console.error('Failed to initiate Firebase Storage upload:', err);
+      reject(new Error(`Failed to start image upload: ${err?.message || err}`));
     }
   });
 }
@@ -404,7 +366,8 @@ export async function uploadStorePhoto(
   const validation = validateImageFile(file);
   if (!validation.valid) throw new Error(validation.error);
 
-  const path = `stores/${storeId}/store-photo_${Date.now()}`;
+  const targetId = uid;
+  const path = `stores/${targetId}/store-photo_${Date.now()}`;
   return uploadImageToStorage(
     file,
     path,
@@ -420,22 +383,22 @@ export async function uploadStorePhoto(
 
 /**
  * Upload Seller Store Banner/Cover Photo
- * Path: stores/{storeId}/banner
+ * Path: stores/{uid}/banner
  */
 export async function uploadStoreBanner(
   file: File,
-  storeId: string,
+  storeId?: string,
   onProgress?: UploadProgressCallback,
   cancelRef?: UploadCancelRef
 ): Promise<UploadResult> {
   const uid = auth.currentUser?.uid;
   if (!uid) throw new Error('Please sign in with your Google account to update your store banner.');
-  if (!storeId) throw new Error('Store identifier is required.');
 
   const validation = validateImageFile(file);
   if (!validation.valid) throw new Error(validation.error);
 
-  const path = `stores/${storeId}/banner_${Date.now()}`;
+  const targetId = uid;
+  const path = `stores/${targetId}/banner_${Date.now()}`;
   return uploadImageToStorage(
     file,
     path,

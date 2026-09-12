@@ -59,6 +59,10 @@ export const RoleSelectionScreen: React.FC<RoleSelectionScreenProps> = ({
 
   const [isSaving, setIsSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [sellerDetailsOpen, setSellerDetailsOpen] = useState(false);
+  const [whatYouSell, setWhatYouSell] = useState('');
+  const [storeName, setStoreName] = useState('');
+  const [whatYouSellError, setWhatYouSellError] = useState<string | null>(null);
 
   const validatePhone = (val: string): boolean => {
     if (!val.trim()) return true; // Optional on initial quick onboarding
@@ -84,7 +88,7 @@ export const RoleSelectionScreen: React.FC<RoleSelectionScreenProps> = ({
     setStep(2);
   };
 
-  const handleSelectRole = async (selectedRole: 'SELLER' | 'BUYER') => {
+  const handleSelectBuyer = async () => {
     setIsSaving(true);
     setErrorMsg(null);
 
@@ -96,15 +100,47 @@ export const RoleSelectionScreen: React.FC<RoleSelectionScreenProps> = ({
         fullName: cleanName,
         phoneNumber: cleanPhone,
         location,
-        role: selectedRole,
+        role: 'BUYER',
       });
 
       setIsSaving(false);
-      if (onRoleSelected) onRoleSelected(selectedRole);
-      if (onSelectRole) onSelectRole(selectedRole);
+      if (onRoleSelected) onRoleSelected('BUYER');
+      if (onSelectRole) onSelectRole('BUYER');
     } catch (err: any) {
       console.error('Error during onboarding completion:', err);
       setErrorMsg(err?.message || 'Unable to finish setting up your account. Please try again.');
+      setIsSaving(false);
+    }
+  };
+
+  const handleCompleteSeller = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!whatYouSell.trim()) {
+      setWhatYouSellError('Please tell us what you sell (e.g. Sarees & Traditional Wear, Handmade Cakes, Organic Spices).');
+      return;
+    }
+    setWhatYouSellError(null);
+    setIsSaving(true);
+    setErrorMsg(null);
+
+    try {
+      const cleanName = storeName.trim() || name.trim() || currentUser?.fullName || 'Seller';
+      const cleanPhone = phone.trim() || currentUser?.phone || '';
+
+      await completeOnboarding({
+        fullName: cleanName,
+        phoneNumber: cleanPhone,
+        location,
+        role: 'SELLER',
+        whatYouSell: whatYouSell.trim(),
+      });
+
+      setIsSaving(false);
+      if (onRoleSelected) onRoleSelected('SELLER');
+      if (onSelectRole) onSelectRole('SELLER');
+    } catch (err: any) {
+      console.error('Error completing seller setup:', err);
+      setErrorMsg(err?.message || 'Unable to finish setting up your seller store. Please try again.');
       setIsSaving(false);
     }
   };
@@ -211,137 +247,237 @@ export const RoleSelectionScreen: React.FC<RoleSelectionScreenProps> = ({
           </form>
         ) : (
           <div className="space-y-6">
-            {/* Step 2 Header */}
-            <div className="text-center space-y-2">
-              <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-50 border border-amber-200 text-amber-900 rounded-full text-xs font-medium">
-                <span>Step 2 of 2</span>
-                <span>•</span>
-                <span>Choose Role</span>
-              </div>
-              <h1 className="text-2xl sm:text-3xl font-bold text-stone-900 tracking-tight">
-                How will you use LocalCart?
-              </h1>
-              <p className="text-sm text-stone-600 max-w-md mx-auto">
-                Welcome, <span className="text-stone-900 font-semibold">{name}</span>! Select your account type to proceed.
-              </p>
-            </div>
+            {sellerDetailsOpen ? (
+              <form onSubmit={handleCompleteSeller} className="space-y-6">
+                <div className="text-center space-y-2">
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-full text-xs font-medium">
+                    <span>Step 2 of 2</span>
+                    <span>•</span>
+                    <span>Store Specialty</span>
+                  </div>
+                  <h1 className="text-2xl sm:text-3xl font-bold text-stone-900 tracking-tight">
+                    What do you sell?
+                  </h1>
+                  <p className="text-sm text-stone-600 max-w-md mx-auto">
+                    Tell neighborhood buyers what you make, sell, or specialize in. LocalCart personalizes your storefront with this.
+                  </p>
+                </div>
 
-            {errorMsg && (
-              <div className="p-3.5 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs flex items-center gap-2">
-                <AlertCircle className="h-4 w-4 shrink-0 text-red-500" />
-                <span>{errorMsg}</span>
-              </div>
+                {errorMsg && (
+                  <div className="p-3.5 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs flex items-center gap-2">
+                    <AlertCircle className="h-4 w-4 shrink-0 text-red-500" />
+                    <span>{errorMsg}</span>
+                  </div>
+                )}
+
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-stone-700 mb-1.5">
+                      What do you sell? *
+                    </label>
+                    <input
+                      type="text"
+                      value={whatYouSell}
+                      onChange={e => {
+                        setWhatYouSell(e.target.value);
+                        if (whatYouSellError) setWhatYouSellError(null);
+                      }}
+                      placeholder="e.g. Handmade Cakes, Pastries and Cupcakes (or Sarees, Terracotta Crafts, Organic Spices)"
+                      required
+                      className={`w-full px-4 py-3 bg-white border rounded-xl text-sm text-stone-900 focus:outline-none ${
+                        whatYouSellError
+                          ? 'border-red-400 focus:border-red-500'
+                          : 'border-stone-300 focus:border-emerald-600 focus:ring-1 focus:ring-emerald-600'
+                      }`}
+                    />
+                    {whatYouSellError ? (
+                      <span className="text-[11px] text-red-600 mt-1 block">
+                        {whatYouSellError}
+                      </span>
+                    ) : (
+                      <span className="text-[11px] text-stone-500 mt-1 block">
+                        Free-text description of your specialties. You can update this anytime from your Store Profile.
+                      </span>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-stone-700 mb-1.5">
+                      Business / Store Name (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={storeName}
+                      onChange={e => setStoreName(e.target.value)}
+                      placeholder={`${name ? `${name}'s Store` : 'My Store'}`}
+                      className="w-full px-4 py-2.5 bg-white border border-stone-300 rounded-xl text-xs sm:text-sm text-stone-900 focus:outline-none focus:border-emerald-600"
+                    />
+                  </div>
+                </div>
+
+                <div className="pt-2 flex flex-col sm:flex-row items-center gap-3">
+                  <button
+                    type="submit"
+                    disabled={isSaving}
+                    className="w-full sm:flex-1 py-3.5 px-6 bg-emerald-700 hover:bg-emerald-800 text-white font-medium text-sm rounded-xl transition flex items-center justify-center gap-2 cursor-pointer shadow-xs disabled:opacity-50 active:scale-[0.99]"
+                  >
+                    {isSaving ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <span>Setting up your store...</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>Launch Seller Dashboard</span>
+                        <ArrowRight className="h-4 w-4" />
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setSellerDetailsOpen(false)}
+                    disabled={isSaving}
+                    className="w-full sm:w-auto px-5 py-3.5 bg-stone-100 hover:bg-stone-200 text-stone-700 text-xs sm:text-sm font-medium rounded-xl transition cursor-pointer"
+                  >
+                    ← Back to role choice
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <>
+                {/* Step 2 Header */}
+                <div className="text-center space-y-2">
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-amber-50 border border-amber-200 text-amber-900 rounded-full text-xs font-medium">
+                    <span>Step 2 of 2</span>
+                    <span>•</span>
+                    <span>Choose Role</span>
+                  </div>
+                  <h1 className="text-2xl sm:text-3xl font-bold text-stone-900 tracking-tight">
+                    How will you use LocalCart?
+                  </h1>
+                  <p className="text-sm text-stone-600 max-w-md mx-auto">
+                    Welcome, <span className="text-stone-900 font-semibold">{name}</span>! Select your account type to proceed.
+                  </p>
+                </div>
+
+                {errorMsg && (
+                  <div className="p-3.5 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs flex items-center gap-2">
+                    <AlertCircle className="h-4 w-4 shrink-0 text-red-500" />
+                    <span>{errorMsg}</span>
+                  </div>
+                )}
+
+                {/* Two Large Role Cards */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 mt-6 text-left">
+                  {/* Buyer Option */}
+                  <div
+                    onClick={() => !isSaving && handleSelectBuyer()}
+                    className="group relative cursor-pointer border-2 border-stone-200 hover:border-amber-500 bg-white hover:bg-amber-50/30 rounded-2xl p-6 transition-all flex flex-col justify-between shadow-xs hover:shadow-md"
+                  >
+                    <div>
+                      <div className="w-12 h-12 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center text-xl mb-4 group-hover:scale-105 transition-transform">
+                        <ShoppingBag className="w-6 h-6" />
+                      </div>
+                      <h3 className="text-lg font-bold text-stone-900 group-hover:text-amber-800">
+                        I want to Buy
+                      </h3>
+                      <span className="text-xs text-stone-500 block mb-3 mt-0.5">
+                        Customer Account
+                      </span>
+                      <p className="text-xs text-stone-600 leading-relaxed mb-4">
+                        Discover products from neighborhood businesses, home bakers, and local stores, and buy directly.
+                      </p>
+
+                      <ul className="space-y-2 text-xs text-stone-600">
+                        <li className="flex items-center gap-2">
+                          <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                          <span>Browse local shops and unique products</span>
+                        </li>
+                        <li className="flex items-center gap-2">
+                          <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                          <span>Direct order placement with transparent bills</span>
+                        </li>
+                        <li className="flex items-center gap-2">
+                          <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                          <span>Pay directly via UPI or Cash on Delivery</span>
+                        </li>
+                      </ul>
+                    </div>
+
+                    <div className="mt-6 pt-4 border-t border-stone-100 flex items-center justify-between text-xs font-semibold text-amber-800">
+                      <span>Enter as Buyer</span>
+                      {isSaving ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <ArrowRight className="h-4 w-4 transform group-hover:translate-x-1 transition-transform" />
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Seller Option */}
+                  <div
+                    onClick={() => {
+                      setSellerDetailsOpen(true);
+                      setErrorMsg(null);
+                    }}
+                    className="group relative cursor-pointer border-2 border-stone-200 hover:border-emerald-500 bg-white hover:bg-emerald-50/30 rounded-2xl p-6 transition-all flex flex-col justify-between shadow-xs hover:shadow-md"
+                  >
+                    <div>
+                      <div className="w-12 h-12 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center text-xl mb-4 group-hover:scale-105 transition-transform">
+                        <Store className="w-6 h-6" />
+                      </div>
+                      <h3 className="text-lg font-bold text-stone-900 group-hover:text-emerald-800">
+                        I want to Sell
+                      </h3>
+                      <span className="text-xs text-stone-500 block mb-3 mt-0.5">
+                        Store & Business Account
+                      </span>
+                      <p className="text-xs text-stone-600 leading-relaxed mb-4">
+                        Create a public store, showcase your inventory, manage stock, and receive orders directly.
+                      </p>
+
+                      <ul className="space-y-2 text-xs text-stone-600">
+                        <li className="flex items-center gap-2">
+                          <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                          <span>Create and customize your store profile</span>
+                        </li>
+                        <li className="flex items-center gap-2">
+                          <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                          <span>Manage inventory with automatic stock locking</span>
+                        </li>
+                        <li className="flex items-center gap-2">
+                          <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                          <span>Zero marketplace commission on direct orders</span>
+                        </li>
+                      </ul>
+                    </div>
+
+                    <div className="mt-6 pt-4 border-t border-stone-100 flex items-center justify-between text-xs font-semibold text-emerald-800">
+                      <span>Open Store</span>
+                      <ArrowRight className="h-4 w-4 transform group-hover:translate-x-1 transition-transform" />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Options footer */}
+                <div className="mt-6 pt-4 border-t border-stone-100 flex items-center justify-between">
+                  <button
+                    type="button"
+                    onClick={() => setStep(1)}
+                    className="inline-flex items-center gap-1.5 text-xs text-stone-600 hover:text-stone-900 transition font-medium cursor-pointer"
+                  >
+                    <span>Edit name, phone or delivery address (optional)</span>
+                    <ArrowRight className="h-3.5 w-3.5" />
+                  </button>
+
+                  <div className="flex items-center gap-1.5 text-xs text-stone-500">
+                    <ShieldCheck className="h-4 w-4 text-emerald-600" />
+                    <span>Google-verified account</span>
+                  </div>
+                </div>
+              </>
             )}
-
-            {/* Two Large Role Cards */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 mt-6 text-left">
-              {/* Buyer Option */}
-              <div
-                onClick={() => !isSaving && handleSelectRole('BUYER')}
-                className="group relative cursor-pointer border-2 border-stone-200 hover:border-amber-500 bg-white hover:bg-amber-50/30 rounded-2xl p-6 transition-all flex flex-col justify-between shadow-xs hover:shadow-md"
-              >
-                <div>
-                  <div className="w-12 h-12 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center text-xl mb-4 group-hover:scale-105 transition-transform">
-                    <ShoppingBag className="w-6 h-6" />
-                  </div>
-                  <h3 className="text-lg font-bold text-stone-900 group-hover:text-amber-800">
-                    I want to Buy
-                  </h3>
-                  <span className="text-xs text-stone-500 block mb-3 mt-0.5">
-                    Customer Account
-                  </span>
-                  <p className="text-xs text-stone-600 leading-relaxed mb-4">
-                    Discover products from neighborhood businesses, home bakers, and local stores, and buy directly.
-                  </p>
-
-                  <ul className="space-y-2 text-xs text-stone-600">
-                    <li className="flex items-center gap-2">
-                      <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
-                      <span>Browse local shops and unique products</span>
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
-                      <span>Direct order placement with transparent bills</span>
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
-                      <span>Pay directly via UPI or Cash on Delivery</span>
-                    </li>
-                  </ul>
-                </div>
-
-                <div className="mt-6 pt-4 border-t border-stone-100 flex items-center justify-between text-xs font-semibold text-amber-800">
-                  <span>Enter as Buyer</span>
-                  {isSaving ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <ArrowRight className="h-4 w-4 transform group-hover:translate-x-1 transition-transform" />
-                  )}
-                </div>
-              </div>
-
-              {/* Seller Option */}
-              <div
-                onClick={() => !isSaving && handleSelectRole('SELLER')}
-                className="group relative cursor-pointer border-2 border-stone-200 hover:border-emerald-500 bg-white hover:bg-emerald-50/30 rounded-2xl p-6 transition-all flex flex-col justify-between shadow-xs hover:shadow-md"
-              >
-                <div>
-                  <div className="w-12 h-12 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center text-xl mb-4 group-hover:scale-105 transition-transform">
-                    <Store className="w-6 h-6" />
-                  </div>
-                  <h3 className="text-lg font-bold text-stone-900 group-hover:text-emerald-800">
-                    I want to Sell
-                  </h3>
-                  <span className="text-xs text-stone-500 block mb-3 mt-0.5">
-                    Store & Business Account
-                  </span>
-                  <p className="text-xs text-stone-600 leading-relaxed mb-4">
-                    Create a public store, showcase your inventory, manage stock, and receive orders directly.
-                  </p>
-
-                  <ul className="space-y-2 text-xs text-stone-600">
-                    <li className="flex items-center gap-2">
-                      <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
-                      <span>Create and customize your store profile</span>
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
-                      <span>Manage inventory with automatic stock locking</span>
-                    </li>
-                    <li className="flex items-center gap-2">
-                      <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
-                      <span>Zero marketplace commission on direct orders</span>
-                    </li>
-                  </ul>
-                </div>
-
-                <div className="mt-6 pt-4 border-t border-stone-100 flex items-center justify-between text-xs font-semibold text-emerald-800">
-                  <span>Open Store</span>
-                  {isSaving ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <ArrowRight className="h-4 w-4 transform group-hover:translate-x-1 transition-transform" />
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Options footer */}
-            <div className="mt-6 pt-4 border-t border-stone-100 flex items-center justify-between">
-              <button
-                type="button"
-                onClick={() => setStep(1)}
-                className="inline-flex items-center gap-1.5 text-xs text-stone-600 hover:text-stone-900 transition font-medium cursor-pointer"
-              >
-                <span>Edit name, phone or delivery address (optional)</span>
-                <ArrowRight className="h-3.5 w-3.5" />
-              </button>
-
-              <div className="flex items-center gap-1.5 text-xs text-stone-500">
-                <ShieldCheck className="h-4 w-4 text-emerald-600" />
-                <span>Google-verified account</span>
-              </div>
-            </div>
           </div>
         )}
       </div>

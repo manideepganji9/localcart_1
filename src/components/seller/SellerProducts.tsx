@@ -84,7 +84,7 @@ export const SellerProducts: React.FC<SellerProductsProps> = ({
     setEditingProduct(null);
     setName('');
     setDescription('');
-    setCategory(seller?.businessCategory || PRODUCT_CATEGORIES[0].name);
+    setCategory(seller?.whatYouSell || seller?.businessCategory || PRODUCT_CATEGORIES[0].name);
     setOriginalPrice(450);
     setDiscountPercent(0);
     setStockQuantity(10);
@@ -423,6 +423,12 @@ export const SellerProducts: React.FC<SellerProductsProps> = ({
                 onChange={e => setCategory(e.target.value)}
                 className="w-full px-3.5 py-2 bg-[#181818] border border-[#FFFFFF15] text-xs text-white focus:outline-none focus:border-[#E5C392]"
               >
+                {category && !PRODUCT_CATEGORIES.some(c => c.name === category) && (
+                  <option value={category}>{category}</option>
+                )}
+                {seller?.whatYouSell && seller.whatYouSell !== category && !PRODUCT_CATEGORIES.some(c => c.name === seller.whatYouSell) && (
+                  <option value={seller.whatYouSell}>{seller.whatYouSell}</option>
+                )}
                 {PRODUCT_CATEGORIES.map(c => (
                   <option key={c.id} value={c.name}>
                     {c.name}

@@ -40,11 +40,10 @@ export const SellerBusinessRoom: React.FC<SellerBusinessRoomProps> = ({ onNaviga
 
   const [businessName, setBusinessName] = useState(seller?.businessName || '');
   const [tagline, setTagline] = useState(seller?.tagline || '');
-  const [businessCategory, setBusinessCategory] = useState(seller?.businessCategory || seller?.whatYouSell || 'Bakery & Desserts');
+  const [whatYouSell, setWhatYouSell] = useState(seller?.whatYouSell || seller?.businessCategory || '');
   const [businessDescription, setBusinessDescription] = useState(seller?.businessDescription || '');
   const [bannerUrl, setBannerUrl] = useState(seller?.bannerUrl || '');
   const [storePhotoUrl, setStorePhotoUrl] = useState(seller?.storePhotoUrl || seller?.logoUrl || '');
-  const [logoUrl, setLogoUrl] = useState(seller?.logoUrl || seller?.storePhotoUrl || '');
   const [openingHours, setOpeningHours] = useState(seller?.openingHours || '10:00 AM - 9:00 PM (Daily)');
   const [contactPhone, setContactPhone] = useState(seller?.contactPhone || '');
   const [contactEmail, setContactEmail] = useState(seller?.contactEmail || '');
@@ -67,11 +66,14 @@ export const SellerBusinessRoom: React.FC<SellerBusinessRoomProps> = ({ onNaviga
     if (seller) {
       setBusinessName(seller.businessName || '');
       setTagline(seller.tagline || '');
-      setBusinessCategory(seller.businessCategory || seller.whatYouSell || 'Bakery & Desserts');
+      setWhatYouSell(seller.whatYouSell || seller.businessCategory || '');
       setBusinessDescription(seller.businessDescription || '');
-      setBannerUrl(seller.bannerUrl || '');
-      setStorePhotoUrl(seller.storePhotoUrl || seller.logoUrl || '');
-      setLogoUrl(seller.logoUrl || seller.storePhotoUrl || '');
+      if (seller.bannerUrl !== undefined) {
+        setBannerUrl(seller.bannerUrl || '');
+      }
+      if (seller.storePhotoUrl !== undefined || seller.logoUrl !== undefined) {
+        setStorePhotoUrl(seller.storePhotoUrl || seller.logoUrl || '');
+      }
       setOpeningHours(seller.openingHours || '10:00 AM - 9:00 PM (Daily)');
       setContactPhone(seller.contactPhone || '');
       setContactEmail(seller.contactEmail || '');
@@ -96,16 +98,17 @@ export const SellerBusinessRoom: React.FC<SellerBusinessRoomProps> = ({ onNaviga
     setSaveError(null);
 
     try {
+      const cleanWhatYouSell = whatYouSell.trim();
       await updateSellerProfile({
         id: seller.id,
-        businessName,
-        tagline,
-        businessCategory,
-        whatYouSell: businessCategory,
-        businessDescription,
-        bannerUrl: bannerUrl || seller.bannerUrl || DEFAULT_STORE_BANNER,
-        storePhotoUrl: storePhotoUrl || logoUrl || seller.storePhotoUrl || seller.logoUrl || DEFAULT_STORE_PHOTO,
-        logoUrl: logoUrl || storePhotoUrl || seller.logoUrl || seller.storePhotoUrl || DEFAULT_STORE_PHOTO,
+        businessName: businessName.trim() || `${currentUser?.fullName || 'My'}'s Store`,
+        tagline: tagline.trim(),
+        whatYouSell: cleanWhatYouSell,
+        businessCategory: cleanWhatYouSell,
+        businessDescription: businessDescription.trim(),
+        bannerUrl: bannerUrl || '',
+        storePhotoUrl: storePhotoUrl || '',
+        logoUrl: storePhotoUrl || '',
         openingHours,
         contactPhone,
         contactEmail,
@@ -188,7 +191,7 @@ export const SellerBusinessRoom: React.FC<SellerBusinessRoomProps> = ({ onNaviga
           <div className="absolute bottom-5 left-5 right-5 flex items-end justify-between">
             <div className="flex items-center gap-4">
               <img
-                src={storePhotoUrl || seller.storePhotoUrl || logoUrl || seller.logoUrl || DEFAULT_STORE_PHOTO}
+                src={storePhotoUrl || seller.storePhotoUrl || DEFAULT_STORE_PHOTO}
                 alt="Logo preview"
                 className="w-16 h-16 object-cover border border-[#FFFFFF30] bg-[#161616]"
                 onError={(e) => {
@@ -197,7 +200,7 @@ export const SellerBusinessRoom: React.FC<SellerBusinessRoomProps> = ({ onNaviga
               />
               <div className="text-white">
                 <span className="text-[9px] uppercase tracking-[0.25em] font-mono text-[#E5C392]">
-                  {businessCategory}
+                  {whatYouSell || 'Local Store'}
                 </span>
                 <h2 className="font-serif text-2xl text-white mt-0.5">{businessName || 'Seller Store Name'}</h2>
                 <p className="text-xs text-[#AAA] font-light italic">{tagline || 'Store tagline...'}</p>
@@ -242,9 +245,9 @@ export const SellerBusinessRoom: React.FC<SellerBusinessRoomProps> = ({ onNaviga
               </label>
               <input
                 type="text"
-                value={businessCategory}
-                onChange={e => setBusinessCategory(e.target.value)}
-                placeholder="e.g. Handmade Cakes, Pastries & Cupcakes"
+                value={whatYouSell}
+                onChange={e => setWhatYouSell(e.target.value)}
+                placeholder="e.g. Handmade Cakes, Pastries and Cupcakes"
                 className="w-full px-3.5 py-2.5 bg-[#181818] border border-[#FFFFFF15] text-xs text-white focus:outline-none focus:border-[#E5C392]"
                 required
               />
@@ -281,11 +284,10 @@ export const SellerBusinessRoom: React.FC<SellerBusinessRoomProps> = ({ onNaviga
                 id="business-room-store-photo"
                 label="Storefront / Business Photograph"
                 helperText="Main business photo appearing in your Public Business Room, Search & Discovery"
-                currentImageUrl={storePhotoUrl || seller.storePhotoUrl || logoUrl || seller.logoUrl}
+                currentImageUrl={storePhotoUrl || seller.storePhotoUrl}
                 onUpload={async (file, onProgress, cancelRef) => {
                   const res = await uploadStorePhoto(file, seller.id, onProgress, cancelRef);
                   setStorePhotoUrl(res.downloadUrl);
-                  setLogoUrl(res.downloadUrl);
                   await updateSellerProfile({
                     id: seller.id,
                     storePhotoUrl: res.downloadUrl,
@@ -294,12 +296,11 @@ export const SellerBusinessRoom: React.FC<SellerBusinessRoomProps> = ({ onNaviga
                   return res.downloadUrl;
                 }}
                 onRemove={async () => {
-                  const toDelete = storePhotoUrl || seller.storePhotoUrl || logoUrl || seller.logoUrl;
+                  const toDelete = storePhotoUrl || seller.storePhotoUrl;
                   if (toDelete) {
                     await deleteStorageImage(toDelete);
                   }
                   setStorePhotoUrl('');
-                  setLogoUrl('');
                   await updateSellerProfile({
                     id: seller.id,
                     storePhotoUrl: '',
@@ -327,8 +328,8 @@ export const SellerBusinessRoom: React.FC<SellerBusinessRoomProps> = ({ onNaviga
                   return res.downloadUrl;
                 }}
                 onRemove={async () => {
-                  if (bannerUrl) {
-                    await deleteStorageImage(bannerUrl);
+                  if (bannerUrl || seller.bannerUrl) {
+                    await deleteStorageImage(bannerUrl || seller.bannerUrl);
                   }
                   setBannerUrl('');
                   await updateSellerProfile({

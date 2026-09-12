@@ -28,8 +28,8 @@ export const SellerAIAssistant: React.FC = () => {
 
   const seller = currentUser ? getSellerByUserId(currentUser.id) : undefined;
   // Strictly scope to current authenticated seller's live Firestore records
-  const sellerProducts = seller ? products.filter(p => p.sellerId === seller.id) : [];
-  const sellerOrders = seller ? orders.filter(o => o.sellerId === seller.id) : [];
+  const sellerProducts = seller ? products.filter(p => p.sellerId === seller.id || (seller.userId && p.sellerId === seller.userId)) : [];
+  const sellerOrders = seller ? orders.filter(o => o.sellerId === seller.id || (seller.userId && o.sellerId === seller.userId)) : [];
 
   const [inputQuery, setInputQuery] = useState('');
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);

@@ -116,6 +116,7 @@ export interface AuthContextType {
     phoneNumber: string;
     location: LocationInfo;
     role: UserRole;
+    whatYouSell?: string;
   }) => Promise<void>;
 }
 
@@ -716,6 +717,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     phoneNumber: string;
     location: LocationInfo;
     role: UserRole;
+    whatYouSell?: string;
   }) => {
     const targetUid = firebaseUser?.uid || currentUser?.id;
     if (!targetUid) {
@@ -897,19 +899,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             operationType: 'set',
             currentRole: 'seller',
           });
+          const cleanWhatYouSell = (params.whatYouSell || '').trim();
           await setDoc(sellerDocRef, {
             id: sellerId,
             userId: targetUid,
             businessName: `${cleanName}'s Store`,
             businessSlug: `${cleanSlug}-${Date.now().toString().slice(-4)}`,
-            businessCategory: 'Grocery & Essentials',
-            businessDescription: 'Local neighborhood storefront.',
+            businessCategory: cleanWhatYouSell || 'General Store',
+            whatYouSell: cleanWhatYouSell || 'General Store',
+            businessDescription: cleanWhatYouSell ? `Local store specializing in ${cleanWhatYouSell}.` : 'Local neighborhood storefront.',
             tagline: 'Fresh products delivered locally',
             location: canonicalLocation,
             serviceRadiusKm: 15,
-            bannerUrl: 'https://images.unsplash.com/photo-1517433670267-08bbd4be890f?auto=format&fit=crop&w=1200&q=80',
+            bannerUrl: '',
             logoUrl: currentUser?.avatarUrl || firebaseUser?.photoURL || DEFAULT_AVATAR,
-            storePhotoUrl: 'https://images.unsplash.com/photo-1578985545062-69928b1d9587?auto=format&fit=crop&w=300&q=80',
+            storePhotoUrl: '',
             openingHours: '09:00 AM - 09:00 PM',
             deliveryOptions: {
               sellerDelivery: true,
