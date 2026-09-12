@@ -183,11 +183,11 @@ export function getCloudinaryConfig(): { cloudName: string; uploadPreset: string
   const rawCloud = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME || '';
   const rawPreset = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET || '';
 
-  let cloudName = String(rawCloud).trim().replace(/^["']|["']$/g, '');
+  let cloudName = String(rawCloud).trim().replace(/^["']|["']$/g, '').toLowerCase();
   const uploadPreset = String(rawPreset).trim().replace(/^["']|["']$/g, '');
 
   // Resilient normalization: correct accidental double 'i' in 'fdlyniiad' -> 'fdlyniad'
-  if (cloudName.toLowerCase() === 'fdlyniiad') {
+  if (cloudName === 'fdlyniiad') {
     cloudName = 'fdlyniad';
   }
 

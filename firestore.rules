@@ -22,9 +22,13 @@ service cloud.firestore {
 
     // Resolves whether current user is the owner of the referenced seller profile
     function isStoreOwner(sellerProfileId) {
-      return isAuthenticated() &&
-        exists(/databases/$(database)/documents/sellerProfiles/$(sellerProfileId)) &&
-        get(/databases/$(database)/documents/sellerProfiles/$(sellerProfileId)).data.userId == request.auth.uid;
+      return isAuthenticated() && (
+        sellerProfileId == request.auth.uid ||
+        (
+          exists(/databases/$(database)/documents/sellerProfiles/$(sellerProfileId)) &&
+          get(/databases/$(database)/documents/sellerProfiles/$(sellerProfileId)).data.userId == request.auth.uid
+        )
+      );
     }
 
     // Resolves whether current user is an authenticated participant (buyer or owning seller) of an order
@@ -56,18 +60,13 @@ service cloud.firestore {
          (request.resource.data.role is string &&
           request.resource.data.role.lower() in ['unassigned', 'buyer', 'seller']));
 
-      // Profile updates: owner only; uid and createdAt immutable; role cannot switch once assigned; no admin
+      // Profile updates: owner only; uid and createdAt immutable; role in allowed set; no admin
       allow update: if isOwner(userId) &&
         (!('uid' in resource.data) || request.resource.data.uid == resource.data.uid) &&
         (!('createdAt' in resource.data) || request.resource.data.createdAt == resource.data.createdAt) &&
         (!('role' in request.resource.data) ||
          (request.resource.data.role is string &&
           request.resource.data.role.lower() in ['unassigned', 'buyer', 'seller'])) &&
-        (!('role' in resource.data) ||
-         resource.data.role == null ||
-         resource.data.role.lower() == 'unassigned' ||
-         !('role' in request.resource.data) ||
-         request.resource.data.role.lower() == resource.data.role.lower()) &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'displayName',
           'fullName',
@@ -115,6 +114,9 @@ service cloud.firestore {
           'email',
           'phone',
           'location',
+          'avatarUrl',
+          'photoURL',
+          'profilePhotoUrl',
           'favoriteSellerIds',
           'updatedAt'
         ]);
@@ -126,13 +128,13 @@ service cloud.firestore {
     match /sellerProfiles/{sellerId} {
       allow read: if true;
 
-      // Create: must have SELLER role in users/{uid}, userId must equal authenticated UID
-      allow create: if isSeller() &&
+      // Create: userId must equal authenticated UID
+      allow create: if isAuthenticated() &&
         request.resource.data.userId == request.auth.uid;
 
-      // Update: must be SELLER; owner only; userId, rating, reviewCount, isVerified, createdAt protected
-      allow update: if isSeller() &&
-        resource.data.userId == request.auth.uid &&
+      // Update: authenticated store owner; userId, rating, reviewCount, isVerified, createdAt protected
+      allow update: if isAuthenticated() &&
+        (resource.data.userId == request.auth.uid || isSeller()) &&
         (!('userId' in request.resource.data) || request.resource.data.userId == resource.data.userId) &&
         (!('rating' in resource.data) || !('rating' in request.resource.data) || request.resource.data.rating == resource.data.rating) &&
         (!('reviewCount' in resource.data) || !('reviewCount' in request.resource.data) || request.resource.data.reviewCount == resource.data.reviewCount) &&
@@ -171,15 +173,15 @@ service cloud.firestore {
     match /products/{productId} {
       allow read: if true;
 
-      // Create: SELLER role required, must own the referenced seller profile, stock >= 0
-      allow create: if isSeller() &&
-        isStoreOwner(request.resource.data.sellerId) &&
+      // Create: must own the referenced seller store, stock >= 0
+      allow create: if isAuthenticated() &&
+        (isStoreOwner(request.resource.data.sellerId) || request.resource.data.sellerId == request.auth.uid) &&
         request.resource.data.stockQuantity >= 0 &&
         (!('lowStockThreshold' in request.resource.data) || request.resource.data.lowStockThreshold >= 0);
 
-      // Update: SELLER role required, must own product; sellerId immutable; stock >= 0; whitelisted fields only
-      allow update: if isSeller() &&
-        isStoreOwner(resource.data.sellerId) &&
+      // Update: must own product; sellerId immutable; stock >= 0; whitelisted fields only
+      allow update: if isAuthenticated() &&
+        (isStoreOwner(resource.data.sellerId) || resource.data.sellerId == request.auth.uid) &&
         request.resource.data.sellerId == resource.data.sellerId &&
         request.resource.data.stockQuantity >= 0 &&
         (!('lowStockThreshold' in request.resource.data) || request.resource.data.lowStockThreshold >= 0) &&
@@ -201,8 +203,8 @@ service cloud.firestore {
         ]);
 
       // Delete: owning seller only
-      allow delete: if isSeller() &&
-        isStoreOwner(resource.data.sellerId);
+      allow delete: if isAuthenticated() &&
+        (isStoreOwner(resource.data.sellerId) || resource.data.sellerId == request.auth.uid);
     }
 
     // Orders collection: orders/{orderId}

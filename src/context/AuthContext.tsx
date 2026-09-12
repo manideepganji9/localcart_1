@@ -701,14 +701,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         fullName: updates.fullName || currentUser.fullName,
       });
     } catch (err: any) {
-      console.error('[Firestore] Error updating user profile in users:', {
-        code: err?.code,
-        message: err?.message,
-        collection: 'users',
-        doc: currentUser.id,
-        updates: firestoreUpdates,
-      });
-      throw err;
+      try {
+        await setDoc(userDocRef, { ...firestoreUpdates, uid: currentUser.id }, { merge: true });
+        const updated: User = { ...currentUser, ...updates };
+        setCurrentUser(updated);
+        setCachedUserProfile(currentUser.id, {
+          avatarUrl: updates.avatarUrl || currentUser.avatarUrl,
+          fullName: updates.fullName || currentUser.fullName,
+        });
+      } catch (fallbackErr: any) {
+        console.error('[Firestore] Error updating user profile in users:', {
+          code: fallbackErr?.code || err?.code,
+          message: fallbackErr?.message || err?.message,
+          collection: 'users',
+          doc: currentUser.id,
+          updates: firestoreUpdates,
+        });
+        throw fallbackErr;
+      }
     }
   };
 

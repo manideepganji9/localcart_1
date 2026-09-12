@@ -568,7 +568,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     } catch (err: any) {
       console.warn('Firestore updateDoc failed, attempting setDoc with merge:', err?.message || err);
       try {
-        await setDoc(docRef, payload, { merge: true });
+        const currentUid = auth.currentUser?.uid;
+        await setDoc(docRef, { ...payload, ...(currentUid ? { userId: currentUid } : {}) }, { merge: true });
       } catch (mergeErr: any) {
         logFirestoreDiag({
           path: `sellerProfiles/${targetDocId}`,
