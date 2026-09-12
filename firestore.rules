@@ -1,21 +1,78 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+
     // Helper functions
     function isAuthenticated() {
       return request.auth != null;
     }
+
     function isOwner(userId) {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
-    // Users collection
-    match /users/{userId} {
-      allow read: if isAuthenticated();
-      allow write: if isOwner(userId);
+    // Resolves whether current authenticated user has SELLER role in users/{uid}
+    function isSeller() {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role.lower() == 'seller';
+    }
 
-      // Private AI Concierge Chat History
-      match /aiChats/{conversationId} {
+    // Resolves whether current user is the owner of the referenced seller profile
+    function isStoreOwner(sellerProfileId) {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/sellerProfiles/$(sellerProfileId)) &&
+        get(/databases/$(database)/documents/sellerProfiles/$(sellerProfileId)).data.userId == request.auth.uid;
+    }
+
+    // Resolves whether current user is an authenticated participant (buyer or owning seller) of an order
+    function isOrderParticipant(orderId) {
+      return isAuthenticated() &&
+        exists(/databases/$(database)/documents/orders/$(orderId)) &&
+        (
+          get(/databases/$(database)/documents/orders/$(orderId)).data.buyerId == request.auth.uid ||
+          isStoreOwner(get(/databases/$(database)/documents/orders/$(orderId)).data.sellerId)
+        );
+    }
+
+    // Connectivity check - read only
+    match /test/connection {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Users collection: users/{uid}
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+
+      // New profile creation: owner only, role must be 'unassigned', 'buyer', or 'seller' (no admin)
+      allow create: if isOwner(userId) &&
+        request.resource.data.role.lower() in ['unassigned', 'buyer', 'seller'];
+
+      // Profile updates: owner only; uid and createdAt immutable; role cannot switch once assigned; no admin
+      allow update: if isOwner(userId) &&
+        (!('uid' in resource.data) || request.resource.data.uid == resource.data.uid) &&
+        (!('createdAt' in resource.data) || request.resource.data.createdAt == resource.data.createdAt) &&
+        request.resource.data.role.lower() in ['unassigned', 'buyer', 'seller'] &&
+        (resource.data.role.lower() == 'unassigned' || request.resource.data.role.lower() == resource.data.role.lower()) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'displayName',
+          'fullName',
+          'email',
+          'phone',
+          'photoURL',
+          'avatarUrl',
+          'profilePhotoUrl',
+          'location',
+          'onboardingCompleted',
+          'role',
+          'updatedAt'
+        ]);
+
+      allow delete: if false;
+
+      // Private AI Concierge Chat History - owner only
+      match /aiChats/{chatId} {
         allow read, write: if isOwner(userId);
 
         match /messages/{messageId} {
@@ -28,68 +85,194 @@ service cloud.firestore {
       }
     }
 
-    // Seller Profiles collection
-    match /sellerProfiles/{sellerId} {
-      allow read: if true; // Public for browsing storefronts
-      allow create: if isAuthenticated();
-      allow update: if isAuthenticated() && (
-        resource.data.userId == request.auth.uid ||
-        request.resource.data.userId == request.auth.uid ||
-        sellerId == request.auth.uid
-      );
-      allow delete: if isAuthenticated() && (
-        resource.data.userId == request.auth.uid ||
-        sellerId == request.auth.uid ||
-        resource.data.userId == null ||
-        resource.data.userId == ""
-      );
-    }
-
-    // Buyer Profiles collection
+    // Buyer Profiles collection: buyerProfiles/{uid}
     match /buyerProfiles/{buyerId} {
-      allow read: if isAuthenticated();
-      allow write: if isAuthenticated() && (
-        resource.data.userId == request.auth.uid ||
-        request.resource.data.userId == request.auth.uid ||
-        buyerId == request.auth.uid
-      );
+      allow read: if isOwner(buyerId) || (resource != null && resource.data.userId == request.auth.uid);
+
+      // Creation: owner only, userId must equal authenticated UID
+      allow create: if (isOwner(buyerId) || request.resource.data.userId == request.auth.uid) &&
+        request.resource.data.userId == request.auth.uid;
+
+      // Update: owner only; userId immutable; whitelisted fields only
+      allow update: if isAuthenticated() &&
+        (isOwner(buyerId) || resource.data.userId == request.auth.uid) &&
+        request.resource.data.userId == resource.data.userId &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'fullName',
+          'email',
+          'phone',
+          'location',
+          'favoriteSellerIds',
+          'updatedAt'
+        ]);
+
+      allow delete: if false;
     }
 
-    // Products collection
+    // Seller Profiles collection: sellerProfiles/{sellerId}
+    match /sellerProfiles/{sellerId} {
+      allow read: if true;
+
+      // Create: must have SELLER role in users/{uid}, userId must equal authenticated UID
+      allow create: if isSeller() &&
+        request.resource.data.userId == request.auth.uid;
+
+      // Update: must be SELLER; owner only; userId, rating, reviewCount, isVerified, createdAt protected
+      allow update: if isSeller() &&
+        resource.data.userId == request.auth.uid &&
+        request.resource.data.userId == resource.data.userId &&
+        request.resource.data.rating == resource.data.rating &&
+        request.resource.data.reviewCount == resource.data.reviewCount &&
+        request.resource.data.isVerified == resource.data.isVerified &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'businessName',
+          'description',
+          'category',
+          'location',
+          'deliveryOptions',
+          'updatedAt'
+        ]);
+
+      // Delete: allows seller to delete their storefront
+      allow delete: if isAuthenticated() &&
+        resource.data.userId == request.auth.uid;
+    }
+
+    // Products collection: products/{productId}
     match /products/{productId} {
-      allow read: if true; // Public catalog for discovery
-      allow create: if isAuthenticated();
-      allow update: if isAuthenticated();
-      allow delete: if isAuthenticated();
+      allow read: if true;
+
+      // Create: SELLER role required, must own the referenced seller profile, stock >= 0
+      allow create: if isSeller() &&
+        isStoreOwner(request.resource.data.sellerId) &&
+        request.resource.data.stockQuantity >= 0 &&
+        (!('lowStockThreshold' in request.resource.data) || request.resource.data.lowStockThreshold >= 0);
+
+      // Update: SELLER role required, must own product; sellerId immutable; stock >= 0; whitelisted fields only
+      allow update: if isSeller() &&
+        isStoreOwner(resource.data.sellerId) &&
+        request.resource.data.sellerId == resource.data.sellerId &&
+        request.resource.data.stockQuantity >= 0 &&
+        (!('lowStockThreshold' in request.resource.data) || request.resource.data.lowStockThreshold >= 0) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name',
+          'description',
+          'category',
+          'originalPrice',
+          'discountPercent',
+          'finalPrice',
+          'stockQuantity',
+          'lowStockThreshold',
+          'inStock',
+          'imageUrl',
+          'images',
+          'preparationTime',
+          'tags',
+          'updatedAt'
+        ]);
+
+      // Delete: owning seller only
+      allow delete: if isSeller() &&
+        isStoreOwner(resource.data.sellerId);
     }
 
-    // Orders collection - Buyer and Seller isolation
+    // Orders collection: orders/{orderId}
     match /orders/{orderId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
-      allow update: if isAuthenticated();
-      allow delete: if false; // Orders are immutable audit records
+      // Read: buyer or owning seller
+      allow read: if isAuthenticated() && (
+        resource.data.buyerId == request.auth.uid ||
+        isStoreOwner(resource.data.sellerId)
+      );
+
+      // Direct client order creation is strictly blocked.
+      // Orders are created exclusively via POST /api/orders/checkout with Firebase Admin SDK.
+      allow create: if false;
+
+      // Role-specific order update logic:
+      allow update: if isAuthenticated() && (
+        // Case 1: Buyer-initiated update (cancelling order before fulfillment, or adding a chat message)
+        (
+          resource.data.buyerId == request.auth.uid &&
+          request.resource.data.buyerId == resource.data.buyerId &&
+          request.resource.data.sellerId == resource.data.sellerId &&
+          request.resource.data.items == resource.data.items &&
+          request.resource.data.subtotal == resource.data.subtotal &&
+          request.resource.data.deliveryFee == resource.data.deliveryFee &&
+          request.resource.data.discountTotal == resource.data.discountTotal &&
+          request.resource.data.total == resource.data.total &&
+          request.resource.data.isBillLocked == resource.data.isBillLocked &&
+          request.resource.data.buyerLocation == resource.data.buyerLocation &&
+          request.resource.data.sellerLocation == resource.data.sellerLocation &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'messages', 'updatedAt']) &&
+          (
+            request.resource.data.status == resource.data.status ||
+            (request.resource.data.status == 'CANCELLED' && resource.data.status in ['PENDING', 'ACCEPTED', 'CONFIRMED'])
+          )
+        ) ||
+        // Case 2: Seller-initiated update (fulfillment status, notes, delivery options)
+        (
+          isStoreOwner(resource.data.sellerId) &&
+          request.resource.data.buyerId == resource.data.buyerId &&
+          request.resource.data.sellerId == resource.data.sellerId &&
+          request.resource.data.buyerName == resource.data.buyerName &&
+          request.resource.data.buyerPhone == resource.data.buyerPhone &&
+          request.resource.data.items == resource.data.items &&
+          request.resource.data.subtotal == resource.data.subtotal &&
+          request.resource.data.deliveryFee == resource.data.deliveryFee &&
+          request.resource.data.discountTotal == resource.data.discountTotal &&
+          request.resource.data.total == resource.data.total &&
+          request.resource.data.isBillLocked == resource.data.isBillLocked &&
+          request.resource.data.buyerLocation == resource.data.buyerLocation &&
+          request.resource.data.sellerLocation == resource.data.sellerLocation &&
+          request.resource.data.status in ['PENDING', 'ACCEPTED', 'CONFIRMED', 'PREPARING', 'READY', 'READY_FOR_DELIVERY', 'OUT_FOR_DELIVERY', 'DELIVERED', 'REJECTED', 'CANCELLED'] &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status',
+            'rejectionReason',
+            'sellerNotes',
+            'expectedDeliveryDate',
+            'deliveryMethod',
+            'messages',
+            'updatedAt',
+            'lockedAt'
+          ])
+        )
+      );
+
+      allow delete: if false;
     }
 
-    // Conversations collection and messages subcollection
-    match /conversations/{conversationId} {
-      allow read: if isAuthenticated();
-      allow create, update: if isAuthenticated();
+    // Conversations & Messages: conversations/{orderId}
+    match /conversations/{orderId} {
+      allow read: if isOrderParticipant(orderId);
+
+      // Creation allowed for a verified order by its participants
+      allow create: if isOrderParticipant(orderId) &&
+        request.resource.data.orderId == orderId;
+
+      // Update allowed only for participants updating metadata
+      allow update: if isOrderParticipant(orderId) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'lastMessage',
+          'lastMessageAt',
+          'updatedAt',
+          'orderId',
+          'conversationId'
+        ]);
+
       allow delete: if false;
 
       match /messages/{messageId} {
-        allow read: if isAuthenticated();
-        allow create: if isAuthenticated();
-        allow update: if isAuthenticated();
-        allow delete: if false;
-      }
-    }
+        // Read: only participating buyer or store owner of the parent order
+        allow read: if isOrderParticipant(orderId);
 
-    // Notifications collection
-    match /notifications/{notificationId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
-      allow update, delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || resource.data.recipientId == request.auth.uid);
+        // Create: verified participant only, senderId must match auth UID
+        allow create: if isOrderParticipant(orderId) &&
+          request.resource.data.senderId == request.auth.uid;
+
+        // Messages are immutable once sent
+        allow update, delete: if false;
+      }
     }
   }
 }

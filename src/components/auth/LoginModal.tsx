@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Modal } from '../common/Modal';
 import { useAuth } from '../../context/AuthContext';
-import { AlertCircle, Loader2, ShieldCheck, ShoppingBag, Store } from 'lucide-react';
+import { AlertCircle, Check, Copy, Loader2, ShieldCheck, ShoppingBag, Store } from 'lucide-react';
 import { APP_CONFIG } from '../../constants/config';
 import { UserRole } from '../../types';
 
@@ -23,10 +23,14 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   const { signInWithGoogle, isLoading } = useAuth();
   const [error, setError] = useState('');
   const [signingIn, setSigningIn] = useState(false);
+  const [isUnauthorizedDomain, setIsUnauthorizedDomain] = useState(false);
+  const [unauthorizedDomain, setUnauthorizedDomain] = useState('');
+  const [copied, setCopied] = useState(false);
 
   const handleGoogleSignIn = async () => {
     setSigningIn(true);
     setError('');
+    setIsUnauthorizedDomain(false);
     const res = await signInWithGoogle();
     setSigningIn(false);
 
@@ -38,6 +42,10 @@ export const LoginModal: React.FC<LoginModalProps> = ({
         onSuccess(res.role);
       }
     } else {
+      if (res.isUnauthorizedDomain) {
+        setIsUnauthorizedDomain(true);
+        setUnauthorizedDomain(res.domain || (typeof window !== 'undefined' ? window.location.hostname : ''));
+      }
       setError(res.error || 'Google Sign-In failed. Please try again.');
     }
   };
@@ -51,12 +59,44 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       maxWidth="md"
     >
       <div className="space-y-6 py-2 text-stone-700">
-        {error && (
+        {isUnauthorizedDomain ? (
+          <div className="p-4 rounded-xl bg-amber-50/80 border border-amber-200 text-stone-800 space-y-3 text-left">
+            <div className="flex items-start gap-2.5">
+              <AlertCircle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+              <div className="text-xs space-y-1 flex-1">
+                <div className="font-semibold text-stone-900 text-sm">Preview Domain Setup Required</div>
+                <p className="text-stone-600 leading-relaxed">
+                  Google Sign-In requires this domain to be added to Authorized Domains in Firebase:
+                </p>
+                <div className="flex items-center gap-2 py-1">
+                  <code className="bg-white px-2.5 py-1 rounded-md border border-amber-200 text-stone-900 font-mono text-[11px] truncate max-w-[220px]">
+                    {unauthorizedDomain || (typeof window !== 'undefined' ? window.location.hostname : '')}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard?.writeText(unauthorizedDomain || window.location.hostname);
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 2000);
+                    }}
+                    className="px-2.5 py-1 bg-white hover:bg-stone-50 border border-stone-300 rounded-md text-stone-700 text-xs font-medium flex items-center gap-1 shrink-0 cursor-pointer shadow-2xs"
+                  >
+                    {copied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5 text-stone-500" />}
+                    <span>{copied ? 'Copied' : 'Copy'}</span>
+                  </button>
+                </div>
+                <p className="text-[11px] text-stone-500">
+                  In <strong>Firebase Console &rarr; Authentication &rarr; Settings &rarr; Authorized domains</strong>, click &quot;Add domain&quot; and paste this hostname.
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : error ? (
           <div className="flex items-start gap-2.5 p-3.5 rounded-xl text-xs bg-red-50 border border-red-200 text-red-700">
             <AlertCircle className="h-4 w-4 shrink-0 mt-0.5 text-red-500" />
             <span>{error}</span>
           </div>
-        )}
+        ) : null}
 
         <div className="grid grid-cols-2 gap-3">
           <div className="p-3.5 rounded-xl border border-stone-200 bg-stone-50/50 flex flex-col items-center text-center">

@@ -232,7 +232,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return () => unsubscribe();
   }, []);
 
-  // 2. Subscribe to Firestore Buyer Profiles in real-time (authenticated users only)
+  // 2. Subscribe to current Buyer Profile in real-time (authenticated users only)
   useEffect(() => {
     if (!currentUser?.id) {
       setFirestoreBuyers([]);
@@ -240,18 +240,19 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
     let unsubscribe: () => void = () => {};
     try {
-      const colRef = collection(db, 'buyerProfiles');
-      unsubscribe = onSnapshot(colRef, (snapshot) => {
-        const items: BuyerProfile[] = [];
-        snapshot.forEach((docSnap) => {
-          items.push({ id: docSnap.id, ...(docSnap.data() as any) });
-        });
-        setFirestoreBuyers(items);
+      const buyerDocRef = doc(db, 'buyerProfiles', currentUser.id);
+      unsubscribe = onSnapshot(buyerDocRef, (docSnap) => {
+        if (docSnap.exists()) {
+          const profile: BuyerProfile = { id: docSnap.id, ...(docSnap.data() as any) };
+          setFirestoreBuyers([profile]);
+        } else {
+          setFirestoreBuyers([]);
+        }
       }, (err) => {
-        console.warn('Firestore buyers snapshot notice:', err?.message || err);
+        console.warn('Firestore buyer profile snapshot notice:', err?.message || err);
       });
     } catch (err) {
-      console.warn('Failed to listen to buyerProfiles:', err);
+      console.warn('Failed to listen to buyerProfile:', err);
     }
     return () => unsubscribe();
   }, [currentUser?.id]);
@@ -276,36 +277,53 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return () => unsubscribe();
   }, []);
 
-  // 4. Subscribe to Firestore Orders in real-time with resilient retry/listener (authenticated users only)
+  // 4. Subscribe to Firestore Orders in real-time with role-based queries (authenticated users only)
   useEffect(() => {
     if (!currentUser?.id) {
       setFirestoreOrders([]);
       return;
     }
     let unsubscribe: () => void = () => {};
-    const setupOrdersListener = () => {
-      try {
-        const colRef = collection(db, 'orders');
-        unsubscribe = onSnapshot(colRef, (snapshot) => {
-          const items: Order[] = [];
-          snapshot.forEach((docSnap) => {
-            const data = docSnap.data() as any;
-            items.push({ id: docSnap.id, ...data });
-          });
-          // Sort newest first
-          items.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
-          setFirestoreOrders(items);
-        }, (err) => {
-          console.warn('Firestore orders snapshot notice:', err?.message || err);
-        });
-      } catch (err) {
-        console.warn('Failed to listen to orders:', err);
-      }
-    };
+    try {
+      const isSeller = currentUser.role === 'SELLER';
+      let ordersQuery;
 
-    setupOrdersListener();
+      if (isSeller) {
+        // Look up currently authenticated seller profile ID
+        const sellerProfile = firestoreSellers.find(
+          s => s.userId === currentUser.id || s.id === currentUser.id
+        );
+        const currentSellerId = sellerProfile?.id || currentUser.id;
+        ordersQuery = query(
+          collection(db, 'orders'),
+          where('sellerId', '==', currentSellerId)
+        );
+      } else {
+        // Buyer query: orders where buyerId == authenticated UID
+        ordersQuery = query(
+          collection(db, 'orders'),
+          where('buyerId', '==', currentUser.id)
+        );
+      }
+
+      unsubscribe = onSnapshot(ordersQuery, (snapshot) => {
+        const items: Order[] = [];
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data() as any;
+          items.push({ id: docSnap.id, ...data });
+        });
+        // Sort newest first
+        items.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+        setFirestoreOrders(items);
+      }, (err) => {
+        console.warn('Firestore role-based orders snapshot notice:', err?.message || err);
+      });
+    } catch (err) {
+      console.warn('Failed to listen to orders:', err);
+    }
+
     return () => unsubscribe();
-  }, [currentUser?.id]);
+  }, [currentUser?.id, currentUser?.role, firestoreSellers]);
 
   // 5. Subscribe to Notifications in real-time (authenticated users only)
   useEffect(() => {
@@ -315,25 +333,25 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
     let unsubscribe: () => void = () => {};
     try {
-      const notifCol = collection(db, 'notifications');
-      unsubscribe = onSnapshot(notifCol, (snapshot) => {
+      const notifQuery = query(
+        collection(db, 'notifications'),
+        where('userId', '==', currentUser.id)
+      );
+      unsubscribe = onSnapshot(notifQuery, (snapshot) => {
         const notifs: AppNotification[] = [];
         snapshot.forEach((docSnap) => {
           const data = docSnap.data() as any;
-          const targetUser = data.userId || data.recipientId || '';
-          if (!targetUser || targetUser === currentUser.id) {
-            notifs.push({
-              id: docSnap.id,
-              userId: targetUser,
-              recipientId: data.recipientId || data.userId || '',
-              orderId: data.orderId,
-              type: data.type,
-              title: data.title || 'Notification',
-              message: data.message || '',
-              read: data.read ?? false,
-              createdAt: data.createdAt || new Date().toISOString(),
-            });
-          }
+          notifs.push({
+            id: docSnap.id,
+            userId: data.userId || currentUser.id,
+            recipientId: data.recipientId || data.userId || currentUser.id,
+            orderId: data.orderId,
+            type: data.type,
+            title: data.title || 'Notification',
+            message: data.message || '',
+            read: data.read ?? false,
+            createdAt: data.createdAt || new Date().toISOString(),
+          });
         });
         notifs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
         setFirestoreNotifications(notifs);
@@ -761,24 +779,47 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const updateProduct = async (productId: string, updates: Partial<Product>) => {
     const current = products.find(p => p.id === productId);
-    const originalPrice = updates.originalPrice ?? current?.originalPrice ?? 0;
-    const discountPercent = updates.discountPercent ?? current?.discountPercent ?? 0;
-    const calculatedFinal = Math.round(originalPrice * (1 - (discountPercent || 0) / 100));
+    if (!current) return;
 
-    const finalUpdates = {
-      ...updates,
+    // Security check: Only the owning seller may update their products
+    const currentUid = auth.currentUser?.uid;
+    const seller = sellerProfiles.find(s => s.id === current.sellerId || s.userId === current.sellerId);
+    if (!currentUid || (seller && seller.userId && seller.userId !== currentUid)) {
+      console.warn('Product security notice: Only the owning seller can edit this product.');
+      return;
+    }
+
+    const originalPrice = updates.originalPrice ?? current.originalPrice ?? 0;
+    const discountPercent = updates.discountPercent ?? current.discountPercent ?? 0;
+    const calculatedFinal = Math.round(originalPrice * (1 - (discountPercent || 0) / 100));
+    const safeStock = Math.max(0, updates.stockQuantity ?? current.stockQuantity ?? 0);
+
+    // Whitelist only seller-controlled editable fields; prevent tampering with sellerId
+    const safeUpdates: Partial<Product> = {
+      ...(updates.name !== undefined && { name: updates.name }),
+      ...(updates.description !== undefined && { description: updates.description }),
+      ...(updates.category !== undefined && { category: updates.category }),
+      originalPrice,
+      discountPercent,
       finalPrice: calculatedFinal,
+      stockQuantity: safeStock,
+      inStock: safeStock > 0 ? (updates.inStock ?? current.inStock) : false,
+      ...(updates.lowStockThreshold !== undefined && { lowStockThreshold: Math.max(0, updates.lowStockThreshold) }),
+      ...(updates.imageUrl !== undefined && { imageUrl: updates.imageUrl }),
+      ...(updates.images !== undefined && { images: updates.images }),
+      ...(updates.preparationTime !== undefined && { preparationTime: updates.preparationTime }),
+      ...(updates.tags !== undefined && { tags: updates.tags }),
       updatedAt: new Date().toISOString()
     };
 
     // Immediate optimistic update
     setFirestoreProducts(prev =>
-      prev.map(p => (p.id === productId ? { ...p, ...finalUpdates } : p))
+      prev.map(p => (p.id === productId ? { ...p, ...safeUpdates } : p))
     );
 
     try {
       const docRef = doc(db, 'products', productId);
-      await updateDoc(docRef, finalUpdates);
+      await updateDoc(docRef, safeUpdates);
     } catch (err) {
       console.warn('Firestore updateProduct fallback:', err);
     }
@@ -786,7 +827,17 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const deleteProduct = async (productId: string) => {
     const target = products.find(p => p.id === productId);
-    if (target?.imageUrl) {
+    if (!target) return;
+
+    // Security check: Only the owning seller may delete their products
+    const currentUid = auth.currentUser?.uid;
+    const seller = sellerProfiles.find(s => s.id === target.sellerId || s.userId === target.sellerId);
+    if (!currentUid || (seller && seller.userId && seller.userId !== currentUid)) {
+      console.warn('Product security notice: Only the owning seller can delete this product.');
+      return;
+    }
+
+    if (target.imageUrl) {
       deleteStorageImage(target.imageUrl).catch(() => {});
     }
 
@@ -804,6 +855,15 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const toggleProductStock = async (productId: string) => {
     const target = products.find(p => p.id === productId);
     if (!target) return;
+
+    // Security check: Only the owning seller may toggle product stock
+    const currentUid = auth.currentUser?.uid;
+    const seller = sellerProfiles.find(s => s.id === target.sellerId || s.userId === target.sellerId);
+    if (!currentUid || (seller && seller.userId && seller.userId !== currentUid)) {
+      console.warn('Product security notice: Only the owning seller can toggle product stock.');
+      return;
+    }
+
     const updatedStock = !target.inStock;
     const nowIso = new Date().toISOString();
 
@@ -820,7 +880,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
-  // Order workflow & Bill Locking with Atomic Inventory Transactions
+  // Order workflow & Bill Locking via trusted Server-Side API
   const createOrderRequest = async (params: {
     buyerId: string;
     buyerName: string;
@@ -841,204 +901,48 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       throw new Error('Cannot create an order with an empty bag.');
     }
 
-    // Create immutable snapshots of the products at the exact time of order request
-    const snapshots: OrderItemSnapshot[] = params.items.map(ci => ({
-      productId: ci.product.id,
-      productName: ci.product.name,
-      productImage: ci.product.imageUrl,
-      category: ci.product.category,
-      originalPrice: ci.product.originalPrice,
-      discountPercent: ci.product.discountPercent,
-      unitPrice: ci.product.finalPrice,
-      quantity: ci.quantity,
-      itemTotal: ci.product.finalPrice * ci.quantity,
-    }));
-
-    const subtotal = snapshots.reduce((sum, item) => sum + item.itemTotal, 0);
-    const originalSubtotal = snapshots.reduce((sum, item) => sum + item.originalPrice * item.quantity, 0);
-    const discountTotal = originalSubtotal - subtotal;
-    const deliveryFee =
-      subtotal >= (seller.deliveryOptions?.freeDeliveryAbove || 1500)
-        ? 0
-        : (seller.deliveryOptions?.baseDeliveryFee || 50);
-    const total = subtotal + deliveryFee;
-
-    const orderId = `order-${Date.now()}`;
-    const orderNumber = `LC-${Math.floor(1000 + Math.random() * 9000)}`;
-    const nowIso = new Date().toISOString();
-
-    const newOrder: Order = {
-      id: orderId,
-      orderNumber,
-      buyerId: params.buyerId,
-      buyerName: params.buyerName,
-      buyerPhone: params.buyerPhone,
-      buyerLocation: params.buyerLocation,
-      sellerId: seller.id,
-      sellerBusinessName: seller.businessName,
-      sellerLocation: seller.location,
-      items: snapshots,
-      subtotal,
-      deliveryFee,
-      discountTotal,
-      total,
-      status: 'CONFIRMED',
-      isBillLocked: true,
-      lockedAt: nowIso,
-      deliveryMethod: 'SELLER_DELIVERY',
-      customerNotes: params.customerNotes || '',
-      messages: [
-        {
-          id: `msg-${Date.now()}`,
-          orderId,
-          senderRole: 'SYSTEM',
-          senderName: 'LocalCart System',
-          text: `Order #${orderNumber} confirmed! Final bill locked at ₹${total}. Inventory reserved.`,
-          timestamp: nowIso,
-          isSystemEvent: true,
-        },
-      ],
-      createdAt: nowIso,
-      updatedAt: nowIso,
-    };
-
-    // 1. Immediate optimistic UI updates for Order & Product Inventories
-    setFirestoreOrders(prev => [newOrder, ...prev.filter(o => o.id !== orderId)]);
-    setFirestoreProducts(prev =>
-      prev.map(prod => {
-        const itemOrdered = params.items.find(ci => ci.product.id === prod.id);
-        if (itemOrdered) {
-          const newQty = Math.max(0, (prod.stockQuantity || 0) - itemOrdered.quantity);
-          return {
-            ...prod,
-            stockQuantity: newQty,
-            inStock: newQty > 0,
-            updatedAt: nowIso,
-          };
-        }
-        return prod;
-      })
-    );
-
-    // 2. Execute atomic transaction in Firestore
-    try {
-      await runTransaction(db, async transaction => {
-        // 1. Check stock for each product and prepare updates
-        const productUpdates: { ref: any; newStock: number; inStock: boolean }[] = [];
-
-        for (const item of params.items) {
-          const prodRef = doc(db, 'products', item.product.id);
-          const prodSnap = await transaction.get(prodRef);
-
-          let currentStock = item.product.stockQuantity;
-          if (prodSnap.exists()) {
-            const data = prodSnap.data();
-            currentStock = typeof data.stockQuantity === 'number' ? data.stockQuantity : currentStock;
-          }
-
-          if (currentStock < item.quantity) {
-            throw new Error(
-              `Insufficient inventory for "${item.product.name}". Available: ${currentStock}, requested: ${item.quantity}.`
-            );
-          }
-
-          const newStock = currentStock - item.quantity;
-          productUpdates.push({
-            ref: prodRef,
-            newStock,
-            inStock: newStock > 0,
-          });
-        }
-
-        // 2. Decrement stock atomically
-        for (const update of productUpdates) {
-          transaction.update(update.ref, {
-            stockQuantity: update.newStock,
-            inStock: update.inStock,
-            updatedAt: new Date().toISOString(),
-          });
-        }
-
-        // 3. Write Order document
-        const orderRef = doc(db, 'orders', orderId);
-        transaction.set(orderRef, newOrder);
-
-        // 4. Write Conversation document
-        const convRef = doc(db, 'conversations', orderId);
-        transaction.set(convRef, {
-          conversationId: orderId,
-          orderId,
-          buyerId: params.buyerId,
-          buyerName: params.buyerName,
-          sellerId: seller.id,
-          sellerBusinessName: seller.businessName,
-          lastMessage: `Order #${orderNumber} confirmed (₹${total}).`,
-          lastMessageAt: nowIso,
-          createdAt: nowIso,
-          updatedAt: nowIso,
-        });
-
-        // 5. Write initial system message to conversations/{orderId}/messages/{messageId}
-        const firstMsgId = `msg-${Date.now()}`;
-        const msgDocRef = doc(db, 'conversations', orderId, 'messages', firstMsgId);
-        transaction.set(msgDocRef, {
-          id: firstMsgId,
-          messageId: firstMsgId,
-          orderId,
-          conversationId: orderId,
-          senderId: 'system',
-          senderRole: 'SYSTEM',
-          senderName: 'LocalCart System',
-          text: `Order #${orderNumber} confirmed! Final bill locked at ₹${total}. Inventory reserved.`,
-          type: 'ORDER',
-          read: false,
-          status: 'sent',
-          isSystemEvent: true,
-          createdAt: nowIso,
-          timestamp: nowIso,
-        });
-
-        // 6. Write Notification document for the Seller (Immediate New Order notification)
-        const notifDocRef = doc(db, 'notifications', `notif-seller-${Date.now()}`);
-        transaction.set(notifDocRef, {
-          id: notifDocRef.id,
-          userId: seller.userId || seller.id,
-          recipientId: seller.userId || seller.id,
-          orderId,
-          type: 'NEW_ORDER',
-          title: 'New Confirmed Order Received',
-          message: `New order #${orderNumber} from ${params.buyerName} for ₹${total}. Ready for preparation.`,
-          read: false,
-          createdAt: nowIso,
-        });
-
-        // 7. Write Notification document for the Buyer
-        const buyerNotifDocRef = doc(db, 'notifications', `notif-buyer-${Date.now()}`);
-        transaction.set(buyerNotifDocRef, {
-          id: buyerNotifDocRef.id,
-          userId: params.buyerId,
-          recipientId: params.buyerId,
-          orderId,
-          type: 'NEW_ORDER',
-          title: 'Order Confirmed & Bill Locked',
-          message: `Your order #${orderNumber} with ${seller.businessName} is confirmed for ₹${total}.`,
-          read: false,
-          createdAt: nowIso,
-        });
-      });
-    } catch (err: any) {
-      console.error('Atomic createOrderRequest error:', err);
-      // If inventory was insufficient, revert optimistic changes and throw
-      if (err.message && err.message.includes('Insufficient inventory')) {
-        setFirestoreOrders(prev => prev.filter(o => o.id !== orderId));
-        throw err;
-      }
-      // Otherwise document was stored locally
+    const idToken = await auth.currentUser?.getIdToken();
+    if (!idToken) {
+      throw new Error('Authentication required. Please sign in to place an order.');
     }
+
+    const idempotencyKey = `req-${params.buyerId}-${params.sellerId}-${Date.now()}`;
+
+    const res = await fetch('/api/orders/checkout', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${idToken}`,
+        'Idempotency-Key': idempotencyKey,
+      },
+      body: JSON.stringify({
+        idempotencyKey,
+        sellerId: params.sellerId,
+        items: params.items.map(ci => ({
+          productId: ci.product.id,
+          quantity: ci.quantity,
+        })),
+        buyerName: params.buyerName,
+        buyerPhone: params.buyerPhone,
+        buyerLocation: params.buyerLocation,
+        customerNotes: params.customerNotes || '',
+      }),
+    });
+
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      throw new Error(data.error || 'Failed to process order checkout on the server.');
+    }
+
+    const createdOrder: Order = data.order;
+
+    // Optimistically record the returned created order in local state
+    setFirestoreOrders(prev => [createdOrder, ...prev.filter(o => o.id !== createdOrder.id)]);
 
     // Clear cart for this seller
     clearCart(params.sellerId);
-    return newOrder;
+
+    return createdOrder;
   };
 
   const acceptOrder = async (

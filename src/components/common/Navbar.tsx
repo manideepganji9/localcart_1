@@ -29,7 +29,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenLogin,
   onOpenRegister,
 }) => {
-  const { currentUser, isAuthenticated, userRole, logout, authStage } = useAuth();
+  const { currentUser, firebaseUser, isAuthenticated, userRole, logout, authStage, isLoading } = useAuth();
   const { currentCity, setCurrentCity, currentArea, setCurrentArea, orders, getSellerByUserId, customerLocation } = useStore();
   const { hasUnreadBuyerAi, clearBuyerAiUnread, isBuyerThinking } = useAIChat();
   const [showLocationMenu, setShowLocationMenu] = useState(false);
@@ -257,7 +257,9 @@ export const Navbar: React.FC<NavbarProps> = ({
             ) : null}
 
             {/* Profile Dropdown or Sign-in CTAs */}
-            {(isAuthenticated || authStage === 'onboarding') ? (
+            {isLoading ? (
+              <div className="h-9 w-24 bg-stone-100/90 rounded-full animate-pulse" />
+            ) : (firebaseUser && (isAuthenticated || authStage === 'onboarding')) ? (
               <div className="relative">
                 <button
                   onClick={() => setShowUserMenu(!showUserMenu)}

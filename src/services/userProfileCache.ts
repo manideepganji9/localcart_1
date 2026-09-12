@@ -1,5 +1,5 @@
 import { doc, onSnapshot } from 'firebase/firestore';
-import { db } from './firebase';
+import { db, auth } from './firebase';
 import { useState, useEffect } from 'react';
 
 export interface UserProfileSnapshot {
@@ -42,6 +42,12 @@ export function setCachedUserProfile(uid: string, profile: Partial<UserProfileSn
  */
 export function subscribeToUserProfile(uid: string) {
   if (!uid || activeUnsubscribes[uid]) {
+    return;
+  }
+
+  // Under strict Firestore security rules, users may only read their own private profile doc.
+  // Other users' display names and avatars in orders/conversations come from cached metadata.
+  if (auth.currentUser?.uid !== uid) {
     return;
   }
 

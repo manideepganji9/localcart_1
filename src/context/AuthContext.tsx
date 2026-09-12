@@ -12,10 +12,15 @@ import {
   getDoc,
   setDoc,
   updateDoc,
+  collection,
+  query,
+  where,
+  getDocs,
   onSnapshot,
   FirebaseUser,
 } from '../services/firebase';
 import { setCachedUserProfile } from '../services/userProfileCache';
+import { DEFAULT_AVATAR } from '../services/imageStorageService';
 
 function extractCanonicalLocation(data: any): LocationInfo {
   const rawLoc = data?.location || {};
@@ -76,10 +81,30 @@ export interface AuthContextType {
   isLoading: boolean;
   authError: string | null;
   retryProfileLoad: () => Promise<void>;
-  signInWithGoogle: () => Promise<{ success: boolean; isNewUser?: boolean; role?: UserRole; error?: string }>;
-  register: (params: RegisterParams) => Promise<{ success: boolean; isNewUser?: boolean; role?: UserRole; error?: string }>;
-  login: (email: string, password?: string) => Promise<{ success: boolean; role?: UserRole; error?: string }>;
-  switchDemoUser: (personaKey: 'seller1' | 'seller2' | 'seller3' | 'seller4' | 'buyer1' | 'buyer2' | string) => void;
+  signInWithGoogle: () => Promise<{
+    success: boolean;
+    isNewUser?: boolean;
+    role?: UserRole;
+    error?: string;
+    isUnauthorizedDomain?: boolean;
+    domain?: string;
+  }>;
+  register: (params: RegisterParams) => Promise<{
+    success: boolean;
+    isNewUser?: boolean;
+    role?: UserRole;
+    error?: string;
+    isUnauthorizedDomain?: boolean;
+    domain?: string;
+  }>;
+  login: (email: string, password?: string) => Promise<{
+    success: boolean;
+    role?: UserRole;
+    error?: string;
+    isUnauthorizedDomain?: boolean;
+    domain?: string;
+  }>;
+  switchDemoUser: (personaKey: string) => void;
   logout: () => Promise<void>;
   setRole: (role: UserRole) => Promise<void>;
   updateUserLocation: (location: LocationInfo) => Promise<void>;
@@ -96,29 +121,21 @@ export interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [currentUser, setCurrentUser] = useState<User | null>(() => {
-    try {
-      const saved = localStorage.getItem('localcart_active_user');
-      if (saved) return JSON.parse(saved);
-    } catch (e) {
-      // ignore
-    }
-    return null;
-  });
-
+  // A brand-new visitor starts strictly unauthenticated (null)
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isProfileLoading, setIsProfileLoading] = useState<boolean>(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
-  // Sync active user to local storage for persistent recovery
+  // Sync active user to local storage for recovery only when authenticated with Firebase
   useEffect(() => {
-    if (currentUser) {
+    if (currentUser && firebaseUser) {
       localStorage.setItem('localcart_active_user', JSON.stringify(currentUser));
     } else {
       localStorage.removeItem('localcart_active_user');
     }
-  }, [currentUser]);
+  }, [currentUser, firebaseUser]);
 
   // Listen to real Firebase Auth state with real-time profile synchronization
   useEffect(() => {
@@ -132,7 +149,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       setAuthError(null);
 
-      if (!fbUser) {
+      // If user is null OR is an anonymous user, treat strictly as unauthenticated
+      if (!fbUser || fbUser.isAnonymous) {
+        if (fbUser?.isAnonymous) {
+          console.info('[Firebase Auth] Clearing anonymous visitor session from browser persistence');
+          fbSignOut(auth).catch(() => {});
+        }
         setFirebaseUser(null);
         setCurrentUser(null);
         setIsLoading(false);
@@ -141,29 +163,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return;
       }
 
-      // Firebase User authenticated
+      // Valid real Google-authenticated user
       setFirebaseUser(fbUser);
       setIsLoading(false);
       setIsProfileLoading(true);
 
       const userDocRef = doc(db, 'users', fbUser.uid);
 
-      // Check whether a LocalCart profile exists for this Firebase Auth UID
       try {
         const userSnap = await getDoc(userDocRef);
         if (!userSnap.exists()) {
-          // Brand-new Google user: Create minimal profile in Firestore with UID as canonical key
+          // Brand-new Google user: Create minimal profile in Firestore
+          const nowIso = new Date().toISOString();
           const initialData = {
             uid: fbUser.uid,
             email: fbUser.email || '',
             displayName: fbUser.displayName || 'Customer',
             fullName: fbUser.displayName || 'Customer',
+            phone: fbUser.phoneNumber || '',
             photoURL: fbUser.photoURL || '',
+            avatarUrl: fbUser.photoURL || '',
+            profilePhotoUrl: fbUser.photoURL || '',
             role: 'unassigned',
             onboardingCompleted: false,
-            phone: fbUser.phoneNumber || '',
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
+            createdAt: nowIso,
+            updatedAt: nowIso,
             location: {
               city: APP_CONFIG.defaultLocation.city,
               state: APP_CONFIG.defaultLocation.state,
@@ -172,23 +196,67 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               address: '',
             },
           };
-          await setDoc(userDocRef, initialData, { merge: true });
+          await setDoc(userDocRef, initialData);
+
+          const newUser: User = {
+            id: fbUser.uid,
+            email: fbUser.email || '',
+            phone: fbUser.phoneNumber || '',
+            fullName: fbUser.displayName || 'Customer',
+            role: 'UNASSIGNED',
+            avatarUrl: fbUser.photoURL || DEFAULT_AVATAR,
+            createdAt: nowIso,
+            location: initialData.location,
+            onboardingCompleted: false,
+          };
+          setCurrentUser(newUser);
+          setIsProfileLoading(false);
+        } else {
+          const data = userSnap.data();
+          const rawRole = (data.role || '').toLowerCase();
+          const normalizedRole: UserRole =
+            rawRole === 'buyer'
+              ? 'BUYER'
+              : rawRole === 'seller'
+              ? 'SELLER'
+              : 'UNASSIGNED';
+
+          const existingUser: User = {
+            id: fbUser.uid,
+            email: data.email || fbUser.email || '',
+            phone: data.phone || fbUser.phoneNumber || '',
+            fullName: data.displayName || data.fullName || fbUser.displayName || 'Customer',
+            role: normalizedRole,
+            avatarUrl: data.photoURL || data.avatarUrl || fbUser.photoURL || DEFAULT_AVATAR,
+            createdAt: data.createdAt || new Date().toISOString(),
+            location: extractCanonicalLocation(data) || {
+              city: APP_CONFIG.defaultLocation.city,
+              state: APP_CONFIG.defaultLocation.state,
+              pincode: APP_CONFIG.defaultLocation.pincode,
+              area: APP_CONFIG.defaultLocation.area,
+              address: '',
+            },
+            onboardingCompleted: data.onboardingCompleted ?? (normalizedRole !== 'UNASSIGNED'),
+          };
+          setCurrentUser(existingUser);
+          setIsProfileLoading(false);
         }
       } catch (err: any) {
-        console.error('Firestore user profile initialization error in onAuthStateChanged:', err);
-        setAuthError('Unable to finish setting up your account. Please try again.');
+        console.error('[Firestore] User profile initialization notice:', {
+          code: err?.code,
+          message: err?.message,
+          userId: fbUser.uid,
+        });
         setIsProfileLoading(false);
-        return;
       }
 
       // Real-time synchronization of Firestore user profile
       userDocUnsubscribe = onSnapshot(
         userDocRef,
-        (userSnap) => {
+        (snapshot) => {
           setIsProfileLoading(false);
-          setAuthError(null);
-          if (userSnap.exists()) {
-            const data = userSnap.data();
+          if (snapshot.exists()) {
+            const data = snapshot.data();
             const rawRole = (data.role || '').toLowerCase();
             const normalizedRole: UserRole =
               rawRole === 'buyer'
@@ -197,47 +265,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 ? 'SELLER'
                 : 'UNASSIGNED';
 
-            const canonicalLocation = extractCanonicalLocation(data);
-
-            const resolvedUser: User = {
+            const updated: User = {
               id: fbUser.uid,
               email: data.email || fbUser.email || '',
-              phone: data.phone || data.phoneNumber || fbUser.phoneNumber || '',
+              phone: data.phone || fbUser.phoneNumber || '',
               fullName: data.displayName || data.fullName || fbUser.displayName || 'Customer',
               role: normalizedRole,
-              avatarUrl: data.photoURL || fbUser.photoURL || `https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&q=80`,
+              avatarUrl: data.photoURL || data.avatarUrl || fbUser.photoURL || DEFAULT_AVATAR,
               createdAt: data.createdAt || new Date().toISOString(),
-              location: canonicalLocation,
+              location: extractCanonicalLocation(data),
               onboardingCompleted: data.onboardingCompleted ?? (normalizedRole !== 'UNASSIGNED'),
             };
-
-            setCurrentUser(resolvedUser);
-            localStorage.setItem('localcart_active_user', JSON.stringify(resolvedUser));
-          } else {
-            // Document missing, role unassigned
-            const fallbackUser: User = {
-              id: fbUser.uid,
-              email: fbUser.email || '',
-              phone: fbUser.phoneNumber || '',
-              fullName: fbUser.displayName || 'Customer',
-              role: 'UNASSIGNED',
-              avatarUrl: fbUser.photoURL || `https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&q=80`,
-              createdAt: new Date().toISOString(),
-              location: {
-                city: APP_CONFIG.defaultLocation.city,
-                state: APP_CONFIG.defaultLocation.state,
-                pincode: APP_CONFIG.defaultLocation.pincode,
-                area: APP_CONFIG.defaultLocation.area,
-                address: '',
-              },
-              onboardingCompleted: false,
-            };
-            setCurrentUser(fallbackUser);
+            setCurrentUser(updated);
           }
         },
-        (err) => {
-          console.error('Real-time Firestore user profile notice:', err);
-          setAuthError('Unable to finish setting up your account. Please try again.');
+        (snapErr) => {
+          console.error('[Firestore] Profile snapshot error:', {
+            code: snapErr?.code,
+            message: snapErr?.message,
+            userId: fbUser.uid,
+          });
           setIsProfileLoading(false);
         }
       );
@@ -249,7 +296,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, []);
 
-  // Retry Firestore profile lookup/creation if an error occurred
   const retryProfileLoad = async () => {
     if (!firebaseUser) return;
     setIsProfileLoading(true);
@@ -257,63 +303,80 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const userDocRef = doc(db, 'users', firebaseUser.uid);
       const userSnap = await getDoc(userDocRef);
-      if (!userSnap.exists()) {
-        const initialData = {
-          uid: firebaseUser.uid,
-          email: firebaseUser.email || '',
-          displayName: firebaseUser.displayName || 'Customer',
-          fullName: firebaseUser.displayName || 'Customer',
-          photoURL: firebaseUser.photoURL || '',
-          role: 'unassigned',
-          onboardingCompleted: false,
-          phone: firebaseUser.phoneNumber || '',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          location: {
-            city: APP_CONFIG.defaultLocation.city,
-            state: APP_CONFIG.defaultLocation.state,
-            pincode: APP_CONFIG.defaultLocation.pincode,
-            area: APP_CONFIG.defaultLocation.area,
-            address: '',
-          },
+      if (userSnap.exists()) {
+        const data = userSnap.data();
+        const rawRole = (data.role || '').toLowerCase();
+        const normalizedRole: UserRole =
+          rawRole === 'buyer'
+            ? 'BUYER'
+            : rawRole === 'seller'
+            ? 'SELLER'
+            : 'UNASSIGNED';
+        const existingUser: User = {
+          id: firebaseUser.uid,
+          email: data.email || firebaseUser.email || '',
+          phone: data.phone || firebaseUser.phoneNumber || '',
+          fullName: data.displayName || data.fullName || firebaseUser.displayName || 'Customer',
+          role: normalizedRole,
+          avatarUrl: data.photoURL || data.avatarUrl || firebaseUser.photoURL || DEFAULT_AVATAR,
+          createdAt: data.createdAt || new Date().toISOString(),
+          location: extractCanonicalLocation(data),
+          onboardingCompleted: data.onboardingCompleted ?? (normalizedRole !== 'UNASSIGNED'),
         };
-        await setDoc(userDocRef, initialData, { merge: true });
+        setCurrentUser(existingUser);
       }
-      setIsProfileLoading(false);
     } catch (err: any) {
-      console.error('Retry profile load error:', err);
-      setAuthError('Unable to finish setting up your account. Please try again.');
+      console.error('[Firestore] Retry profile load error:', err);
+      setAuthError('Unable to connect to your account profile. Please check connection and retry.');
+    } finally {
       setIsProfileLoading(false);
     }
   };
 
-  // Google Sign-In with canonical UID matching
-  const signInWithGoogle = async (): Promise<{ success: boolean; isNewUser?: boolean; role?: UserRole; error?: string }> => {
+  // Google Sign-In with canonical Firebase Auth UID
+  const signInWithGoogle = async (): Promise<{
+    success: boolean;
+    isNewUser?: boolean;
+    role?: UserRole;
+    error?: string;
+    isUnauthorizedDomain?: boolean;
+    domain?: string;
+  }> => {
     setIsLoading(true);
     setAuthError(null);
     try {
       const result = await signInWithPopup(auth, googleProvider);
       const fbUser = result.user;
-
       setFirebaseUser(fbUser);
 
-      // Check if user document exists in Firestore using Firebase UID
       const userDocRef = doc(db, 'users', fbUser.uid);
-      const userSnap = await getDoc(userDocRef);
+      let userSnap: any = null;
+      try {
+        userSnap = await getDoc(userDocRef);
+      } catch (docErr: any) {
+        console.error('[Firestore] Error reading user doc:', {
+          code: docErr?.code,
+          message: docErr?.message,
+          userId: fbUser.uid,
+        });
+      }
 
-      if (!userSnap.exists()) {
-        // Create initial minimal profile document
+      const nowIso = new Date().toISOString();
+
+      if (!userSnap || !userSnap.exists()) {
         const initialData = {
           uid: fbUser.uid,
           email: fbUser.email || '',
           displayName: fbUser.displayName || 'Customer',
           fullName: fbUser.displayName || 'Customer',
+          phone: fbUser.phoneNumber || '',
           photoURL: fbUser.photoURL || '',
+          avatarUrl: fbUser.photoURL || '',
+          profilePhotoUrl: fbUser.photoURL || '',
           role: 'unassigned',
           onboardingCompleted: false,
-          phone: fbUser.phoneNumber || '',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
+          createdAt: nowIso,
+          updatedAt: nowIso,
           location: {
             city: APP_CONFIG.defaultLocation.city,
             state: APP_CONFIG.defaultLocation.state,
@@ -322,7 +385,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             address: '',
           },
         };
-        await setDoc(userDocRef, initialData, { merge: true });
+
+        try {
+          await setDoc(userDocRef, initialData);
+        } catch (setErr: any) {
+          console.error('[Firestore] Error creating initial user profile:', {
+            code: setErr?.code,
+            message: setErr?.message,
+            userId: fbUser.uid,
+          });
+        }
 
         const newUser: User = {
           id: fbUser.uid,
@@ -330,13 +402,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           phone: '',
           fullName: fbUser.displayName || 'Customer',
           role: 'UNASSIGNED',
-          avatarUrl: fbUser.photoURL || '',
-          createdAt: initialData.createdAt,
+          avatarUrl: fbUser.photoURL || DEFAULT_AVATAR,
+          createdAt: nowIso,
           location: initialData.location,
           onboardingCompleted: false,
         };
         setCurrentUser(newUser);
-        localStorage.setItem('localcart_active_user', JSON.stringify(newUser));
         setIsLoading(false);
         setIsProfileLoading(false);
         return { success: true, isNewUser: true, role: 'UNASSIGNED' };
@@ -353,11 +424,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const existingUser: User = {
           id: fbUser.uid,
           email: data.email || fbUser.email || '',
-          phone: data.phone || data.phoneNumber || fbUser.phoneNumber || '',
+          phone: data.phone || fbUser.phoneNumber || '',
           fullName: data.displayName || data.fullName || fbUser.displayName || 'Customer',
           role: normalizedRole,
-          avatarUrl: data.photoURL || fbUser.photoURL || '',
-          createdAt: data.createdAt || new Date().toISOString(),
+          avatarUrl: data.photoURL || data.avatarUrl || fbUser.photoURL || DEFAULT_AVATAR,
+          createdAt: data.createdAt || nowIso,
           location: extractCanonicalLocation(data) || {
             city: APP_CONFIG.defaultLocation.city,
             state: APP_CONFIG.defaultLocation.state,
@@ -368,7 +439,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           onboardingCompleted: data.onboardingCompleted ?? (normalizedRole !== 'UNASSIGNED'),
         };
         setCurrentUser(existingUser);
-        localStorage.setItem('localcart_active_user', JSON.stringify(existingUser));
         setIsLoading(false);
         setIsProfileLoading(false);
         return { success: true, isNewUser: normalizedRole === 'UNASSIGNED', role: normalizedRole };
@@ -380,30 +450,49 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         console.info('Google sign-in popup was closed by user.');
         return { success: false, error: 'Sign-in window was closed. Click below to try again.' };
       } else if (err?.code === 'auth/popup-blocked') {
-        console.warn('Google sign-in popup was blocked by browser.');
         const errMsg = 'Popup was blocked by your browser. Please allow popups or open in a new tab.';
-        setAuthError(errMsg);
         return { success: false, error: errMsg };
+      } else if (err?.code === 'auth/unauthorized-domain' || err?.message?.includes('unauthorized-domain')) {
+        const domain = typeof window !== 'undefined' ? window.location.hostname : 'current domain';
+        console.warn(`[Firebase Auth] Domain "${domain}" is not authorized in Firebase Console.`);
+        const errMsg = `This preview domain (${domain}) is not authorized for Google Sign-In in Firebase Console.`;
+        return {
+          success: false,
+          error: errMsg,
+          isUnauthorizedDomain: true,
+          domain,
+        };
       } else {
-        console.error('Google Sign-In notice:', err?.message || err);
-        const errMsg = err?.message || 'Unable to finish setting up your account. Please try again.';
-        setAuthError(errMsg);
+        console.error('[Firebase Auth] Sign-in error:', err);
+        const errMsg = err?.message || 'Google Sign-In failed. Please try again.';
         return { success: false, error: errMsg };
       }
     }
   };
 
   // Register function - delegates strictly to verified Google authentication
-  const register = async (_params: RegisterParams): Promise<{ success: boolean; isNewUser?: boolean; error?: string }> => {
+  const register = async (_params: RegisterParams): Promise<{
+    success: boolean;
+    isNewUser?: boolean;
+    role?: UserRole;
+    error?: string;
+    isUnauthorizedDomain?: boolean;
+    domain?: string;
+  }> => {
     return signInWithGoogle();
   };
 
   // Login function - delegates strictly to verified Google authentication
-  const login = async (_email: string, _password?: string): Promise<{ success: boolean; error?: string }> => {
+  const login = async (_email: string, _password?: string): Promise<{
+    success: boolean;
+    role?: UserRole;
+    error?: string;
+    isUnauthorizedDomain?: boolean;
+    domain?: string;
+  }> => {
     return signInWithGoogle();
   };
 
-  // Switch demo persona (no-op in production)
   const switchDemoUser = (_personaKey: string) => {
     // Demo accounts removed for production
   };
@@ -416,41 +505,56 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
     setCurrentUser(null);
     setFirebaseUser(null);
+    setAuthError(null);
     localStorage.removeItem('localcart_active_user');
   };
 
   const setRole = async (newRole: UserRole) => {
     if (!currentUser) return;
-    const updated: User = { ...currentUser, role: newRole };
-    setCurrentUser(updated);
-
+    const cleanRole = newRole.toLowerCase();
+    const userDocRef = doc(db, 'users', currentUser.id);
     try {
-      const userDocRef = doc(db, 'users', currentUser.id);
       await updateDoc(userDocRef, {
-        role: newRole.toLowerCase(),
+        role: cleanRole,
         updatedAt: new Date().toISOString(),
       });
-    } catch (err) {
-      console.warn('Notice updating role in Firestore:', err);
+      const updated: User = { ...currentUser, role: newRole };
+      setCurrentUser(updated);
+      localStorage.setItem('localcart_active_user', JSON.stringify(updated));
+    } catch (err: any) {
+      console.error('[Firestore] Error updating user role:', {
+        code: err?.code,
+        message: err?.message,
+        collection: 'users',
+        doc: currentUser.id,
+      });
+      throw err;
     }
   };
 
   const confirmUserNameAndRole = async (name: string, newRole: UserRole) => {
     if (!currentUser) return;
     const cleanName = name.trim() || currentUser.fullName || 'Member';
-    const updated: User = { ...currentUser, fullName: cleanName, role: newRole };
-    setCurrentUser(updated);
-
+    const cleanRole = newRole.toLowerCase();
+    const userDocRef = doc(db, 'users', currentUser.id);
     try {
-      const userDocRef = doc(db, 'users', currentUser.id);
       await updateDoc(userDocRef, {
         displayName: cleanName,
         fullName: cleanName,
-        role: newRole.toLowerCase(),
+        role: cleanRole,
         updatedAt: new Date().toISOString(),
       });
-    } catch (err) {
-      console.warn('Notice updating name and role in Firestore:', err);
+      const updated: User = { ...currentUser, fullName: cleanName, role: newRole };
+      setCurrentUser(updated);
+      localStorage.setItem('localcart_active_user', JSON.stringify(updated));
+    } catch (err: any) {
+      console.error('[Firestore] Error updating name and role:', {
+        code: err?.code,
+        message: err?.message,
+        collection: 'users',
+        doc: currentUser.id,
+      });
+      throw err;
     }
   };
 
@@ -470,21 +574,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       longitude: lng,
     };
 
-    const updated: User = { ...currentUser, location: canonical };
-    setCurrentUser(updated);
-
     try {
       const userDocRef = doc(db, 'users', currentUser.id);
       await updateDoc(userDocRef, {
         location: canonical,
-        savedAddress: canonical.address,
-        address: canonical.address,
-        city: canonical.city,
-        state: canonical.state,
-        pincode: canonical.pincode,
-        area: canonical.area,
-        latitude: lat ?? null,
-        longitude: lng ?? null,
         updatedAt: new Date().toISOString(),
       });
 
@@ -498,50 +591,78 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             updatedAt: new Date().toISOString(),
           });
         }
-      } catch (_) {}
+      } catch (bErr: any) {
+        console.error('[Firestore] Error syncing location to buyerProfiles:', {
+          code: bErr?.code,
+          message: bErr?.message,
+          userId: currentUser.id,
+        });
+      }
 
-      // Cache to localStorage
+      const updated: User = { ...currentUser, location: canonical };
+      setCurrentUser(updated);
+
       if (canonical.city) {
         localStorage.setItem('localcart_current_city_v2', canonical.city);
       }
       if (canonical.area) {
         localStorage.setItem('localcart_current_area_v2', canonical.area);
       }
-    } catch (err) {
-      console.warn('Notice updating location in Firestore:', err);
+    } catch (err: any) {
+      console.error('[Firestore] Error updating user location in users:', {
+        code: err?.code,
+        message: err?.message,
+        userId: currentUser.id,
+      });
+      throw err;
     }
   };
 
   const updateUserProfile = async (updates: Partial<User>) => {
     if (!currentUser) return;
-    const updated: User = { ...currentUser, ...updates };
-    setCurrentUser(updated);
+    const userDocRef = doc(db, 'users', currentUser.id);
+    const firestoreUpdates: any = {
+      updatedAt: new Date().toISOString(),
+    };
+    if (updates.fullName !== undefined) {
+      firestoreUpdates.displayName = updates.fullName;
+      firestoreUpdates.fullName = updates.fullName;
+    }
+    if (updates.phone !== undefined) {
+      firestoreUpdates.phone = updates.phone;
+    }
+    if (updates.avatarUrl !== undefined) {
+      firestoreUpdates.photoURL = updates.avatarUrl;
+      firestoreUpdates.avatarUrl = updates.avatarUrl;
+      firestoreUpdates.profilePhotoUrl = updates.avatarUrl;
+    }
+    if (updates.location !== undefined) {
+      firestoreUpdates.location = updates.location;
+    }
+    if (updates.role !== undefined) {
+      firestoreUpdates.role = updates.role.toLowerCase();
+    }
+    if (updates.onboardingCompleted !== undefined) {
+      firestoreUpdates.onboardingCompleted = updates.onboardingCompleted;
+    }
 
     try {
-      const userDocRef = doc(db, 'users', currentUser.id);
-      const firestoreUpdates: any = {
-        updatedAt: new Date().toISOString(),
-      };
-      if (updates.fullName) {
-        firestoreUpdates.displayName = updates.fullName;
-        firestoreUpdates.fullName = updates.fullName;
-      }
-      if (updates.phone !== undefined) firestoreUpdates.phone = updates.phone;
-      if (updates.avatarUrl !== undefined) {
-        firestoreUpdates.photoURL = updates.avatarUrl;
-        firestoreUpdates.avatarUrl = updates.avatarUrl;
-        firestoreUpdates.profilePhotoUrl = updates.avatarUrl;
-        setCachedUserProfile(currentUser.id, {
-          avatarUrl: updates.avatarUrl,
-          fullName: updates.fullName || currentUser.fullName,
-        });
-      }
-      if (updates.location) firestoreUpdates.location = updates.location;
-      if (updates.role) firestoreUpdates.role = updates.role.toLowerCase();
-
       await updateDoc(userDocRef, firestoreUpdates);
-    } catch (err) {
-      console.warn('Notice updating profile in Firestore:', err);
+      const updated: User = { ...currentUser, ...updates };
+      setCurrentUser(updated);
+      setCachedUserProfile(currentUser.id, {
+        avatarUrl: updates.avatarUrl || currentUser.avatarUrl,
+        fullName: updates.fullName || currentUser.fullName,
+      });
+    } catch (err: any) {
+      console.error('[Firestore] Error updating user profile in users:', {
+        code: err?.code,
+        message: err?.message,
+        collection: 'users',
+        doc: currentUser.id,
+        updates: firestoreUpdates,
+      });
+      throw err;
     }
   };
 
@@ -551,86 +672,193 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     location: LocationInfo;
     role: UserRole;
   }) => {
-    const targetUid = currentUser?.id || firebaseUser?.uid;
-    if (!targetUid) return;
+    const targetUid = firebaseUser?.uid || currentUser?.id;
+    if (!targetUid) {
+      throw new Error('Authentication required to complete account setup.');
+    }
 
     const cleanName = params.fullName.trim() || currentUser?.fullName || firebaseUser?.displayName || 'Customer';
     const cleanPhone = params.phoneNumber.trim() || currentUser?.phone || firebaseUser?.phoneNumber || '';
     const cleanRole = params.role;
+    const roleLower = cleanRole.toLowerCase(); // 'buyer' or 'seller'
+    const nowIso = new Date().toISOString();
 
+    const canonicalLocation: LocationInfo = {
+      city: params.location.city || APP_CONFIG.defaultLocation.city,
+      state: params.location.state || APP_CONFIG.defaultLocation.state,
+      pincode: params.location.pincode || APP_CONFIG.defaultLocation.pincode,
+      area: params.location.area || APP_CONFIG.defaultLocation.area,
+      address: params.location.address || '',
+      coordinates: params.location.coordinates || {
+        lat: params.location.latitude ?? 17.4156,
+        lng: params.location.longitude ?? 78.4350,
+      },
+      latitude: params.location.latitude ?? params.location.coordinates?.lat,
+      longitude: params.location.longitude ?? params.location.coordinates?.lng,
+    };
+
+    // 1. First, write to users/{uid} and await completion.
+    // In firestore.rules, users/{uid} update whitelist is:
+    // ['displayName', 'fullName', 'email', 'phone', 'photoURL', 'avatarUrl', 'profilePhotoUrl', 'location', 'onboardingCompleted', 'role', 'updatedAt']
+    const userDocRef = doc(db, 'users', targetUid);
+    const userSnap = await getDoc(userDocRef);
+
+    try {
+      if (!userSnap.exists()) {
+        await setDoc(userDocRef, {
+          uid: targetUid,
+          displayName: cleanName,
+          fullName: cleanName,
+          email: currentUser?.email || firebaseUser?.email || '',
+          phone: cleanPhone,
+          photoURL: currentUser?.avatarUrl || firebaseUser?.photoURL || '',
+          avatarUrl: currentUser?.avatarUrl || firebaseUser?.photoURL || '',
+          profilePhotoUrl: currentUser?.avatarUrl || firebaseUser?.photoURL || '',
+          role: roleLower,
+          onboardingCompleted: true,
+          location: canonicalLocation,
+          createdAt: nowIso,
+          updatedAt: nowIso,
+        });
+      } else {
+        await updateDoc(userDocRef, {
+          displayName: cleanName,
+          fullName: cleanName,
+          email: currentUser?.email || firebaseUser?.email || '',
+          phone: cleanPhone,
+          photoURL: currentUser?.avatarUrl || firebaseUser?.photoURL || '',
+          avatarUrl: currentUser?.avatarUrl || firebaseUser?.photoURL || '',
+          profilePhotoUrl: currentUser?.avatarUrl || firebaseUser?.photoURL || '',
+          role: roleLower,
+          onboardingCompleted: true,
+          location: canonicalLocation,
+          updatedAt: nowIso,
+        });
+      }
+    } catch (err: any) {
+      console.error('[Firestore] Error writing users document in completeOnboarding:', {
+        code: err?.code,
+        message: err?.message,
+        collection: 'users',
+        doc: targetUid,
+        operation: userSnap.exists() ? 'updateDoc' : 'setDoc',
+      });
+      throw err;
+    }
+
+    // 2. Role-specific collection creation/update
+    if (cleanRole === 'BUYER') {
+      try {
+        const buyerDocRef = doc(db, 'buyerProfiles', targetUid);
+        const buyerSnap = await getDoc(buyerDocRef);
+        if (!buyerSnap.exists()) {
+          await setDoc(buyerDocRef, {
+            id: targetUid,
+            userId: targetUid,
+            fullName: cleanName,
+            email: currentUser?.email || firebaseUser?.email || '',
+            phone: cleanPhone,
+            location: canonicalLocation,
+            favoriteSellerIds: [],
+            createdAt: nowIso,
+            updatedAt: nowIso,
+          });
+        } else {
+          await updateDoc(buyerDocRef, {
+            fullName: cleanName,
+            email: currentUser?.email || firebaseUser?.email || '',
+            phone: cleanPhone,
+            location: canonicalLocation,
+            updatedAt: nowIso,
+          });
+        }
+      } catch (bErr: any) {
+        console.error('[Firestore] Error saving buyerProfiles document:', {
+          code: bErr?.code,
+          message: bErr?.message,
+          collection: 'buyerProfiles',
+          doc: targetUid,
+        });
+        throw bErr;
+      }
+    } else if (cleanRole === 'SELLER') {
+      try {
+        const sellersQuery = query(collection(db, 'sellerProfiles'), where('userId', '==', targetUid));
+        const sellersSnap = await getDocs(sellersQuery);
+        if (sellersSnap.empty) {
+          const sellerId = `seller-${targetUid.slice(0, 8)}-${Date.now().toString().slice(-4)}`;
+          const cleanSlug = cleanName.toLowerCase().replace(/[^\w\s-]/g, '').replace(/\s+/g, '-') || 'store';
+          const sellerDocRef = doc(db, 'sellerProfiles', sellerId);
+          await setDoc(sellerDocRef, {
+            id: sellerId,
+            userId: targetUid,
+            businessName: `${cleanName}'s Store`,
+            businessSlug: `${cleanSlug}-${Date.now().toString().slice(-4)}`,
+            businessCategory: 'Grocery & Essentials',
+            businessDescription: 'Local neighborhood storefront.',
+            tagline: 'Fresh products delivered locally',
+            location: canonicalLocation,
+            serviceRadiusKm: 15,
+            bannerUrl: 'https://images.unsplash.com/photo-1517433670267-08bbd4be890f?auto=format&fit=crop&w=1200&q=80',
+            logoUrl: currentUser?.avatarUrl || firebaseUser?.photoURL || DEFAULT_AVATAR,
+            storePhotoUrl: 'https://images.unsplash.com/photo-1578985545062-69928b1d9587?auto=format&fit=crop&w=300&q=80',
+            openingHours: '09:00 AM - 09:00 PM',
+            deliveryOptions: {
+              sellerDelivery: true,
+              thirdParty: false,
+              buyerPickup: true,
+              baseDeliveryFee: 40,
+              freeDeliveryAbove: 500,
+              estimatedTime: '1 - 2 hours',
+            },
+            contactPhone: cleanPhone,
+            contactEmail: currentUser?.email || firebaseUser?.email || '',
+            rating: 5.0,
+            reviewCount: 1,
+            isVerified: true,
+            tags: ['Local Store', 'Verified'],
+            createdAt: nowIso,
+          });
+        }
+      } catch (sErr: any) {
+        console.error('[Firestore] Error saving sellerProfiles document:', {
+          code: sErr?.code,
+          message: sErr?.message,
+          collection: 'sellerProfiles',
+          userId: targetUid,
+        });
+        throw sErr;
+      }
+    }
+
+    // 3. Update active React user state
     const updatedUser: User = {
       id: targetUid,
       email: currentUser?.email || firebaseUser?.email || '',
       phone: cleanPhone,
       fullName: cleanName,
       role: cleanRole,
-      avatarUrl: currentUser?.avatarUrl || firebaseUser?.photoURL || `https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&q=80`,
-      createdAt: currentUser?.createdAt || new Date().toISOString(),
-      location: params.location,
+      avatarUrl: currentUser?.avatarUrl || firebaseUser?.photoURL || DEFAULT_AVATAR,
+      createdAt: currentUser?.createdAt || nowIso,
+      location: canonicalLocation,
       onboardingCompleted: true,
     };
     setCurrentUser(updatedUser);
     localStorage.setItem('localcart_active_user', JSON.stringify(updatedUser));
 
-    try {
-      const userDocRef = doc(db, 'users', targetUid);
-      const profileData = {
-        uid: targetUid,
-        email: updatedUser.email,
-        displayName: cleanName,
-        fullName: cleanName,
-        phoneNumber: cleanPhone,
-        phone: cleanPhone,
-        location: params.location,
-        address: params.location.address || '',
-        city: params.location.city || APP_CONFIG.defaultLocation.city,
-        state: params.location.state || APP_CONFIG.defaultLocation.state,
-        postalCode: params.location.pincode || APP_CONFIG.defaultLocation.pincode,
-        pincode: params.location.pincode || APP_CONFIG.defaultLocation.pincode,
-        area: params.location.area || APP_CONFIG.defaultLocation.area,
-        role: cleanRole.toLowerCase(),
-        onboardingCompleted: true,
-        photoURL: updatedUser.avatarUrl || '',
-        profilePhotoUrl: updatedUser.avatarUrl || '',
-        avatarUrl: updatedUser.avatarUrl || '',
-        createdAt: updatedUser.createdAt || new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      await setDoc(userDocRef, profileData, { merge: true });
-
-      if (cleanRole === 'BUYER') {
-        try {
-          const buyerDocRef = doc(db, 'buyerProfiles', targetUid);
-          await setDoc(
-            buyerDocRef,
-            {
-              id: targetUid,
-              userId: targetUid,
-              fullName: cleanName,
-              email: updatedUser.email,
-              phone: cleanPhone,
-              location: params.location,
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-            },
-            { merge: true }
-          );
-        } catch (bErr) {
-          console.warn('Notice establishing buyer profile record:', bErr);
-        }
-      }
-
-      setCachedUserProfile(targetUid, {
-        uid: targetUid,
-        fullName: cleanName,
-        avatarUrl: updatedUser.avatarUrl || '',
-        role: cleanRole.toLowerCase(),
-      });
-    } catch (err: any) {
-      console.error('Firebase save complete onboarding error:', err);
-      setAuthError('Unable to finish setting up your account. Please try again.');
-      throw err;
+    if (canonicalLocation.city) {
+      localStorage.setItem('localcart_current_city_v2', canonicalLocation.city);
     }
+    if (canonicalLocation.area) {
+      localStorage.setItem('localcart_current_area_v2', canonicalLocation.area);
+    }
+
+    setCachedUserProfile(targetUid, {
+      uid: targetUid,
+      fullName: cleanName,
+      avatarUrl: updatedUser.avatarUrl || '',
+      role: roleLower,
+    });
   };
 
   const activeRole = currentUser?.role || null;

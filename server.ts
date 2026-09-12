@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
+import { getAdminFirestore, verifyAuthToken, type DocumentReference } from './server/firebaseAdmin';
 
 dotenv.config();
 
@@ -59,6 +60,246 @@ async function generateGeminiContent(options: {
 // API Health Check
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', hasGeminiKey: Boolean(apiKey) });
+});
+
+// ============================================================================
+// Secure Checkout Endpoint: Server-side inventory decrement & order creation
+// ============================================================================
+app.post('/api/orders/checkout', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization || '';
+    const idToken = authHeader.startsWith('Bearer ') ? authHeader.substring(7) : '';
+
+    if (!idToken) {
+      return res.status(401).json({ success: false, error: 'Unauthorized: Missing Firebase authentication token.' });
+    }
+
+    // 1. Verify Firebase ID Token to establish trusted buyer UID
+    let decodedToken;
+    try {
+      decodedToken = await verifyAuthToken(idToken);
+    } catch (err: any) {
+      return res.status(401).json({
+        success: false,
+        error: 'Unauthorized: Invalid Firebase authentication session.',
+        details: err.message,
+      });
+    }
+
+    const buyerUid = decodedToken.uid;
+    const idempotencyKey =
+      (req.headers['idempotency-key'] as string) || req.body.idempotencyKey;
+
+    const {
+      sellerId,
+      items,
+      buyerName,
+      buyerPhone,
+      buyerLocation,
+      customerNotes,
+    } = req.body;
+
+    if (!sellerId || typeof sellerId !== 'string') {
+      return res.status(400).json({ success: false, error: 'Invalid sellerId provided.' });
+    }
+
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ success: false, error: 'Order must contain at least one product item.' });
+    }
+
+    // Validate each item structure
+    for (const item of items) {
+      if (!item.productId || typeof item.productId !== 'string') {
+        return res.status(400).json({ success: false, error: 'Invalid productId specified.' });
+      }
+      if (!Number.isInteger(item.quantity) || item.quantity <= 0) {
+        return res.status(400).json({
+          success: false,
+          error: `Quantity must be a positive integer for product "${item.productId}".`,
+        });
+      }
+    }
+
+    const db = getAdminFirestore();
+
+    // 2. Execute atomic Firestore transaction
+    const orderResult = await db.runTransaction(async (transaction) => {
+      // Determine orderId from idempotencyKey or timestamp
+      let orderId = `order-${Date.now()}`;
+      if (idempotencyKey && typeof idempotencyKey === 'string') {
+        const cleanKey = idempotencyKey.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
+        if (cleanKey) {
+          orderId = cleanKey.startsWith('order-') ? cleanKey : `order-${cleanKey}`;
+        }
+      }
+
+      // Check if an order with this idempotency key already exists to prevent duplicate execution
+      const orderRef = db.collection('orders').doc(orderId);
+      const existingOrderSnap = await transaction.get(orderRef);
+      if (existingOrderSnap.exists) {
+        // Return existing confirmed order without re-decrementing inventory
+        return existingOrderSnap.data();
+      }
+
+      // Look up seller store profile
+      const sellerRef = db.collection('sellerProfiles').doc(sellerId);
+      const sellerSnap = await transaction.get(sellerRef);
+
+      if (!sellerSnap.exists) {
+        throw new Error('Seller store not found.');
+      }
+
+      const sellerData = sellerSnap.data() || {};
+
+      // Enforce business rule: Sellers cannot purchase from their own storefront
+      if (sellerData.userId === buyerUid) {
+        throw new Error('Sellers cannot purchase products from their own storefront. Please use a buyer account.');
+      }
+
+      // Read all products and validate inventory
+      const productUpdates: { ref: DocumentReference; newStock: number; inStock: boolean }[] = [];
+      const itemSnapshots: any[] = [];
+      let subtotal = 0;
+      let originalSubtotal = 0;
+
+      for (const item of items) {
+        const prodRef = db.collection('products').doc(item.productId);
+        const prodSnap = await transaction.get(prodRef);
+
+        if (!prodSnap.exists) {
+          throw new Error(`Product "${item.productId}" was not found.`);
+        }
+
+        const prod = prodSnap.data() || {};
+
+        // Verify product belongs to the specified store
+        if (
+          prod.sellerId !== sellerId &&
+          prod.sellerId !== sellerData.id &&
+          prod.sellerId !== sellerData.userId
+        ) {
+          throw new Error(`Product "${prod.name || item.productId}" does not belong to this store.`);
+        }
+
+        const currentStock = typeof prod.stockQuantity === 'number' ? prod.stockQuantity : 0;
+        if (currentStock < item.quantity) {
+          throw new Error(
+            `Insufficient stock for "${prod.name || 'product'}". Available: ${currentStock}, requested: ${item.quantity}.`
+          );
+        }
+
+        // Trusted price calculation based exclusively on Firestore document
+        const originalPrice = typeof prod.originalPrice === 'number' ? prod.originalPrice : 0;
+        const discountPercent = typeof prod.discountPercent === 'number' ? prod.discountPercent : 0;
+        const finalPrice =
+          typeof prod.finalPrice === 'number'
+            ? prod.finalPrice
+            : Math.round(originalPrice * (1 - discountPercent / 100));
+
+        const itemTotal = finalPrice * item.quantity;
+        subtotal += itemTotal;
+        originalSubtotal += originalPrice * item.quantity;
+
+        const newStock = Math.max(0, currentStock - item.quantity);
+        const inStock = newStock > 0;
+
+        productUpdates.push({
+          ref: prodRef,
+          newStock,
+          inStock,
+        });
+
+        itemSnapshots.push({
+          productId: prodSnap.id,
+          productName: prod.name || 'Product',
+          productImage: prod.imageUrl || '',
+          category: prod.category || 'General',
+          originalPrice,
+          discountPercent,
+          unitPrice: finalPrice,
+          quantity: item.quantity,
+          itemTotal,
+        });
+      }
+
+      // Delivery calculation from trusted seller options
+      const discountTotal = originalSubtotal - subtotal;
+      const freeDeliveryAbove = sellerData.deliveryOptions?.freeDeliveryAbove ?? 1500;
+      const baseDeliveryFee = sellerData.deliveryOptions?.baseDeliveryFee ?? 50;
+      const deliveryFee = subtotal >= freeDeliveryAbove ? 0 : baseDeliveryFee;
+      const total = subtotal + deliveryFee;
+
+      const orderNumber = `LC-${Math.floor(1000 + Math.random() * 9000)}`;
+      const nowIso = new Date().toISOString();
+
+      const newOrder = {
+        id: orderId,
+        orderNumber,
+        buyerId: buyerUid,
+        buyerName: buyerName || decodedToken.name || 'Local Shopper',
+        buyerPhone: buyerPhone || '',
+        buyerLocation: buyerLocation || null,
+        sellerId: sellerSnap.id,
+        sellerBusinessName: sellerData.businessName || 'Local Store',
+        sellerLocation: sellerData.location || null,
+        items: itemSnapshots,
+        subtotal,
+        deliveryFee,
+        discountTotal,
+        total,
+        status: 'CONFIRMED',
+        isBillLocked: true,
+        lockedAt: nowIso,
+        deliveryMethod: 'SELLER_DELIVERY',
+        customerNotes: customerNotes || '',
+        messages: [
+          {
+            id: `msg-${Date.now()}`,
+            orderId,
+            senderRole: 'SYSTEM',
+            senderName: 'LocalCart System',
+            text: `Order #${orderNumber} confirmed! Final bill locked at ₹${total}. Inventory reserved.`,
+            timestamp: nowIso,
+            isSystemEvent: true,
+          },
+        ],
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      };
+
+      // Apply inventory decrements
+      for (const update of productUpdates) {
+        transaction.update(update.ref, {
+          stockQuantity: update.newStock,
+          inStock: update.inStock,
+          updatedAt: nowIso,
+        });
+      }
+
+      // Write Order document
+      transaction.set(orderRef, newOrder);
+
+      // Write Conversation document
+      const convRef = db.collection('conversations').doc(orderId);
+      transaction.set(convRef, {
+        conversationId: orderId,
+        orderId,
+        buyerId: buyerUid,
+        buyerName: newOrder.buyerName,
+        sellerId: sellerSnap.id,
+        sellerBusinessName: newOrder.sellerBusinessName,
+        lastMessage: `Order #${orderNumber} confirmed (₹${total}).`,
+        updatedAt: nowIso,
+      });
+
+      return newOrder;
+    });
+
+    return res.status(200).json({ success: true, order: orderResult });
+  } catch (err: any) {
+    console.error('Server checkout error:', err);
+    return res.status(400).json({ success: false, error: err.message || 'Checkout failed.' });
+  }
 });
 
 // AI Concierge Endpoint (Buyer & General Shopping Inquiries)

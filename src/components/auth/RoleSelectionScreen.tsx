@@ -27,22 +27,35 @@ export const RoleSelectionScreen: React.FC<RoleSelectionScreenProps> = ({
 }) => {
   const { currentUser, completeOnboarding } = useAuth();
 
-  // Start directly on Step 2 (Role Selection) for immediate onboarding flow
-  const [step, setStep] = useState<1 | 2>(2);
-  const [name, setName] = useState(currentUser?.fullName || 'Customer');
+  // Start on Step 1 to ensure Name, Phone, and Location are verified
+  const [step, setStep] = useState<1 | 2>(1);
+  const [name, setName] = useState(currentUser?.fullName || '');
   const [phone, setPhone] = useState(currentUser?.phone || '');
   const [phoneError, setPhoneError] = useState<string | null>(null);
 
-  const [location, setLocation] = useState<LocationInfo>(
-    currentUser?.location || {
+  const [location, setLocation] = useState<LocationInfo>(() => {
+    return currentUser?.location || {
       city: APP_CONFIG.defaultLocation.city,
       state: APP_CONFIG.defaultLocation.state,
       pincode: APP_CONFIG.defaultLocation.pincode,
       area: APP_CONFIG.defaultLocation.area,
       address: '',
       coordinates: { lat: 17.4156, lng: 78.4350 },
+    };
+  });
+
+  // Update initial fields when currentUser loads from Firebase
+  React.useEffect(() => {
+    if (currentUser?.fullName && !name) {
+      setName(currentUser.fullName);
     }
-  );
+    if (currentUser?.phone && !phone) {
+      setPhone(currentUser.phone);
+    }
+    if (currentUser?.location?.city && !location.city) {
+      setLocation(currentUser.location);
+    }
+  }, [currentUser]);
 
   const [isSaving, setIsSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);

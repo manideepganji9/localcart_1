@@ -3,6 +3,7 @@ import {
   getAuth,
   GoogleAuthProvider,
   signInWithPopup,
+  signInAnonymously,
   signOut as fbSignOut,
   onAuthStateChanged,
   User as FirebaseUser,
@@ -58,27 +59,36 @@ try {
 
 // Initialize Firestore with specific databaseId as specified by Firebase skill guidelines
 export const db = (() => {
+  const dbId = (firebaseConfigData as any).firestoreDatabaseId;
+  const isCustomDb = dbId && dbId !== '(default)';
+
+  const firestoreSettings = {
+    ignoreUndefinedProperties: true,
+    experimentalAutoDetectLongPolling: true,
+  };
+
   try {
-    return initializeFirestore(
-      app,
-      {
-        ignoreUndefinedProperties: true,
-      },
-      firebaseConfigData.firestoreDatabaseId
-    );
+    if (isCustomDb) {
+      return initializeFirestore(app, firestoreSettings, dbId);
+    }
+    return initializeFirestore(app, firestoreSettings);
   } catch {
-    return getFirestore(app, firebaseConfigData.firestoreDatabaseId);
+    if (isCustomDb) {
+      return getFirestore(app, dbId);
+    }
+    return getFirestore(app);
   }
 })();
 
-// Validate Connection to Firestore on boot as mandated by Firebase skill
+// Validate Connection to Firestore on boot with graceful offline handling
 if (typeof window !== 'undefined') {
   (async () => {
     try {
       await getDocFromServer(doc(db, 'test', 'connection'));
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('the client is offline')) {
-        console.warn('Firestore connection notice: Client operating in offline mode.');
+    } catch (error: any) {
+      const msg = error?.message || '';
+      if (msg.includes('offline') || msg.includes('unavailable') || msg.includes('permission')) {
+        console.info('Firestore connection note: Ready in resilient mode.');
       }
     }
   })().catch(() => {});
@@ -131,6 +141,7 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
 
 export {
   signInWithPopup,
+  signInAnonymously,
   fbSignOut,
   onAuthStateChanged,
   collection,
