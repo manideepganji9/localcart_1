@@ -6,7 +6,88 @@ import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
 
 // server/firebaseAdmin.ts
+import crypto from "node:crypto";
 var adminApp = null;
+var publicKeysCache = null;
+var publicKeysExpires = 0;
+async function getGooglePublicKeys() {
+  if (publicKeysCache && Date.now() < publicKeysExpires) {
+    return publicKeysCache;
+  }
+  const res = await fetch(
+    "https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com"
+  );
+  const cacheControl = res.headers.get("cache-control") || "";
+  const maxAgeMatch = cacheControl.match(/max-age=(\d+)/);
+  const maxAgeSec = maxAgeMatch ? parseInt(maxAgeMatch[1], 10) : 3600;
+  publicKeysExpires = Date.now() + maxAgeSec * 1e3;
+  publicKeysCache = await res.json();
+  return publicKeysCache;
+}
+async function verifyFirebaseIdTokenCrypto(idToken, projectId = process.env.FIREBASE_PROJECT_ID || "my-localcart") {
+  if (!idToken || typeof idToken !== "string") {
+    throw new Error("Missing ID token");
+  }
+  const parts = idToken.split(".");
+  if (parts.length !== 3) {
+    throw new Error("Invalid JWT format");
+  }
+  let header;
+  let payload;
+  try {
+    header = JSON.parse(Buffer.from(parts[0], "base64url").toString("utf8"));
+    payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+  } catch {
+    throw new Error("Malformed JWT header or payload");
+  }
+  if (header.alg !== "RS256") {
+    throw new Error(`Unsupported algorithm: ${header.alg}`);
+  }
+  const kid = header.kid;
+  if (!kid) {
+    throw new Error("Missing kid in JWT header");
+  }
+  let publicKeys = await getGooglePublicKeys();
+  if (!publicKeys[kid]) {
+    publicKeysCache = null;
+    publicKeysExpires = 0;
+    publicKeys = await getGooglePublicKeys();
+  }
+  const cert = publicKeys[kid];
+  if (!cert) {
+    throw new Error(`Public key not found for kid: ${kid}`);
+  }
+  const dataToVerify = `${parts[0]}.${parts[1]}`;
+  const signature = Buffer.from(parts[2], "base64url");
+  const verifier = crypto.createVerify("RSA-SHA256");
+  verifier.update(dataToVerify);
+  const isValid = verifier.verify(cert, signature);
+  if (!isValid) {
+    throw new Error("Firebase ID token signature verification failed");
+  }
+  const now = Math.floor(Date.now() / 1e3);
+  if (payload.exp <= now) {
+    throw new Error("Firebase ID token has expired");
+  }
+  if (payload.iat > now + 300) {
+    throw new Error("Firebase ID token issued in the future");
+  }
+  const tokenAud = typeof payload.aud === "string" ? payload.aud : "";
+  const effectiveProjectId = projectId || tokenAud;
+  if (effectiveProjectId && tokenAud && tokenAud !== effectiveProjectId) {
+    throw new Error(`Invalid audience: expected ${effectiveProjectId}, got ${tokenAud}`);
+  }
+  if (effectiveProjectId && payload.iss !== `https://securetoken.google.com/${effectiveProjectId}`) {
+    throw new Error(`Invalid issuer: got ${payload.iss}`);
+  }
+  if (!payload.sub || typeof payload.sub !== "string") {
+    throw new Error("Invalid or missing sub claim");
+  }
+  return {
+    ...payload,
+    uid: payload.sub
+  };
+}
 async function getFirebaseAdminApp() {
   if (adminApp) {
     return adminApp;
@@ -74,9 +155,18 @@ async function getAdminFirestore() {
   return getFirestore(app2);
 }
 async function verifyAuthToken(idToken) {
-  const app2 = await getFirebaseAdminApp();
-  const { getAuth } = await import("firebase-admin/auth");
-  return getAuth(app2).verifyIdToken(idToken);
+  const projectId = process.env.FIREBASE_PROJECT_ID || "my-localcart";
+  try {
+    return await verifyFirebaseIdTokenCrypto(idToken, projectId);
+  } catch (cryptoErr) {
+    try {
+      const app2 = await getFirebaseAdminApp();
+      const { getAuth } = await import("firebase-admin/auth");
+      return await getAuth(app2).verifyIdToken(idToken);
+    } catch {
+      throw cryptoErr;
+    }
+  }
 }
 
 // server.ts

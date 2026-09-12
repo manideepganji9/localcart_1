@@ -61,7 +61,13 @@ export async function verifyFirebaseIdTokenCrypto(
     throw new Error('Missing kid in JWT header');
   }
 
-  const publicKeys = await getGooglePublicKeys();
+  // Fetch public keys; if kid not found, bust cache once (handles key rotation)
+  let publicKeys = await getGooglePublicKeys();
+  if (!publicKeys[kid]) {
+    publicKeysCache = null;
+    publicKeysExpires = 0;
+    publicKeys = await getGooglePublicKeys();
+  }
   const cert = publicKeys[kid];
   if (!cert) {
     throw new Error(`Public key not found for kid: ${kid}`);
@@ -87,13 +93,18 @@ export async function verifyFirebaseIdTokenCrypto(
   if (payload.iat > now + 300) {
     throw new Error('Firebase ID token issued in the future');
   }
-// Audience and issuer checks are optional in this deployment; skip strict validation.
-// if (payload.aud !== projectId) {
-//   throw new Error(`Invalid audience: expected ${projectId}, got ${payload.aud}`);
-// }
-// if (payload.iss !== `https://securetoken.google.com/${projectId}`) {
-//   throw new Error(`Invalid issuer: got ${payload.iss}`);
-// }
+
+  // Use the token's own audience as the effective project ID if env var not set,
+  // so this works even when FIREBASE_PROJECT_ID is absent on the Vercel server.
+  const tokenAud = typeof payload.aud === 'string' ? payload.aud : '';
+  const effectiveProjectId = projectId || tokenAud;
+  if (effectiveProjectId && tokenAud && tokenAud !== effectiveProjectId) {
+    throw new Error(`Invalid audience: expected ${effectiveProjectId}, got ${tokenAud}`);
+  }
+  if (effectiveProjectId && payload.iss !== `https://securetoken.google.com/${effectiveProjectId}`) {
+    throw new Error(`Invalid issuer: got ${payload.iss}`);
+  }
+
   if (!payload.sub || typeof payload.sub !== 'string') {
     throw new Error('Invalid or missing sub claim');
   }
