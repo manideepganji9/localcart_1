@@ -2,10 +2,12 @@ import {
   storage,
   storageRef,
   uploadBytes,
+  uploadBytesResumable,
   getDownloadURL,
   deleteObject,
   auth
 } from './firebase';
+import type { UploadTask } from 'firebase/storage';
 
 export interface ImageOptimizationOptions {
   maxWidth?: number;
@@ -188,7 +190,115 @@ export function blobToDataUrl(blob: Blob): Promise<string> {
 }
 
 /**
- * Formats Firebase Storage errors into human-readable, actionable guidance.
+ * Fast diagnostic probe to check if the Firebase Storage bucket is provisioned and reachable.
+ * Simple GET requests to /v0/b/{bucket}/o have Access-Control-Allow-Origin: * so any browser can read the status directly.
+ */
+export async function verifyBucketStatus(bucketName: string): Promise<{ ok: boolean; status: number; message?: string }> {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3500);
+    const res = await fetch(`https://firebasestorage.googleapis.com/v0/b/${bucketName}/o`, {
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (res.status === 404) {
+      return {
+        ok: false,
+        status: 404,
+        message: `Firebase Cloud Storage is not enabled for project "${auth.app.options.projectId || 'my-localcart'}". The storage bucket "${bucketName}" was not found. Please activate Cloud Storage in the Firebase Console (Build > Storage > Get Started).`,
+      };
+    }
+    return { ok: true, status: res.status };
+  } catch (err: any) {
+    if (err?.name === 'AbortError') {
+      return { ok: false, status: 408, message: `Storage request timed out while connecting to bucket "${bucketName}".` };
+    }
+    // Cross-origin or network error; let resumable upload attempt run
+    return { ok: true, status: 0 };
+  }
+}
+
+/**
+ * Formats Firebase Storage errors with clear, actionable distinction between:
+ * - Uninitialized or non-existent bucket
+ * - Storage security rule permissions
+ * - CORS / cross-origin preflight policy
+ * - Authentication state
+ * - Real timeouts
+ */
+export async function formatDetailedStorageError(error: any, bucketName: string, storagePath: string): Promise<string> {
+  const code = error?.code || '';
+  const status = error?.status_ || error?.status;
+  const message = error?.message || '';
+  const serverResponse = error?.serverResponse || error?.customData?.serverResponse || '';
+
+  // 1. Proactively test whether the bucket exists
+  const bucketCheck = await verifyBucketStatus(bucketName);
+  if (!bucketCheck.ok && bucketCheck.status === 404) {
+    return bucketCheck.message!;
+  }
+
+  // 2. Permission / Storage Security Rules
+  if (
+    code === 'storage/unauthorized' ||
+    status === 403 ||
+    serverResponse.includes('403') ||
+    message.includes('permission') ||
+    message.includes('unauthorized')
+  ) {
+    return `Permission denied: Firebase Storage security rules rejected write access to "${storagePath}". Please make sure you are signed in with the authorized account.`;
+  }
+
+  if (code === 'storage/unauthenticated') {
+    return 'Authentication required: Please sign in with your Google account to upload photos.';
+  }
+
+  // 3. Bucket not found
+  if (
+    code === 'storage/bucket-not-found' ||
+    status === 404 ||
+    serverResponse.includes('404') ||
+    serverResponse.includes('NoSuchBucket')
+  ) {
+    return `Firebase Cloud Storage bucket "${bucketName}" was not found. Please activate Cloud Storage in the Firebase Console (Build > Storage > Get Started).`;
+  }
+
+  // 4. Quota exceeded
+  if (code === 'storage/quota-exceeded') {
+    return `Storage quota exceeded for Firebase project "${auth.app.options.projectId}". Please check project usage limits in Firebase Console.`;
+  }
+
+  // 5. User cancellation
+  if (code === 'storage/canceled') {
+    return 'Image upload was cancelled.';
+  }
+
+  // 6. File integrity checksum
+  if (code === 'storage/invalid-checksum') {
+    return 'File upload integrity check failed. Please try uploading the image again.';
+  }
+
+  // 7. CORS vs Network retry limit
+  if (code === 'storage/retry-limit-exceeded') {
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    return `Upload blocked by CORS policy or network policy on bucket "${bucketName}". Please ensure CORS is configured for origin "${origin}".`;
+  }
+
+  if (message.includes('CORS') || message.includes('preflight') || message.includes('Failed to fetch')) {
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    return `Cross-Origin (CORS) error communicating with Firebase Storage from ${origin}.`;
+  }
+
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    return 'No internet connection detected. Please reconnect to the internet and try again.';
+  }
+
+  return message ? `Firebase Storage upload failed: ${message}` : 'Failed to complete image upload.';
+}
+
+/**
+ * Backward-compatible synchronous error formatter
  */
 export function formatStorageError(error: any): string {
   const code = error?.code || '';
@@ -199,52 +309,37 @@ export function formatStorageError(error: any): string {
     code === 'storage/bucket-not-found' ||
     status === 404 ||
     message.includes('404') ||
-    message.includes('bucket does not exist') ||
     message.includes('NoSuchBucket')
   ) {
     return 'Cloud Storage bucket not initialized or not found. Please activate Cloud Storage in the Firebase Console (Build > Storage > Get Started).';
   }
 
-  if (
-    code === 'storage/unauthorized' ||
-    status === 403 ||
-    message.includes('403') ||
-    message.includes('permission') ||
-    message.includes('unauthorized')
-  ) {
-    return 'Permission denied: You do not have permission to upload this photo, or your login session expired. Please sign in again.';
+  if (code === 'storage/unauthorized' || status === 403 || message.includes('permission') || message.includes('unauthorized')) {
+    return 'Permission denied: Firebase Storage security rules rejected this upload. Please verify your login session.';
   }
 
   if (code === 'storage/unauthenticated') {
-    return 'Authentication required. Please sign in with your Google account to upload photos.';
+    return 'Authentication required: Please sign in with your Google account.';
   }
 
   if (code === 'storage/quota-exceeded') {
-    return 'Firebase Storage quota exceeded. Please check your project usage limits.';
+    return 'Firebase Storage quota exceeded.';
   }
 
   if (code === 'storage/retry-limit-exceeded') {
-    return 'Upload connection timed out or blocked by CORS policy. Please verify your internet connection.';
-  }
-
-  if (code === 'storage/invalid-checksum') {
-    return 'File upload integrity check failed. Please try uploading again.';
+    return 'Upload request timed out or blocked by CORS policy.';
   }
 
   if (code === 'storage/canceled') {
     return 'Image upload was cancelled.';
   }
 
-  if (message.includes('Failed to fetch') || message.includes('network') || message.includes('CORS')) {
-    return 'Network or CORS issue connecting to Firebase Storage. Please verify bucket setup and internet access.';
-  }
-
-  return message ? `Failed to upload image: ${message}` : 'Failed to upload image to Firebase Storage.';
+  return message ? `Upload failed: ${message}` : 'Failed to upload image to Firebase Storage.';
 }
 
 /**
- * Upload an image file to Firebase Storage using fast, atomic uploadBytes,
- * stage-based progress updates, cancellation support, and explicit error handling.
+ * Upload an image file to Firebase Storage using resumable upload with live byte progress,
+ * fast pre-flight bucket validation, cancellation support, and comprehensive error reporting.
  */
 export async function uploadImageToStorage(
   file: File | Blob,
@@ -258,6 +353,14 @@ export async function uploadImageToStorage(
     throw new Error('Authentication required: Please sign in with your Google account to upload photos.');
   }
 
+  const bucketName = (storage.app.options as any).storageBucket || 'my-localcart.firebasestorage.app';
+
+  // Fast pre-flight check: If bucket does not exist, fail immediately with clear instructions
+  const bucketCheck = await verifyBucketStatus(bucketName);
+  if (!bucketCheck.ok && bucketCheck.status === 404) {
+    throw new Error(bucketCheck.message);
+  }
+
   let isCancelled = false;
   if (cancelRef) {
     cancelRef.current = () => {
@@ -265,52 +368,105 @@ export async function uploadImageToStorage(
     };
   }
 
-  // Stage 1: Client-side image resize and WebP compression
-  onProgress?.(15);
+  // Stage 1: Client-side image resize & WebP compression (10% - 25%)
+  onProgress?.(10);
   const { blob } = await optimizeImage(file, options);
   if (isCancelled) {
     throw new Error('Image upload was cancelled by user.');
   }
-  onProgress?.(45);
+  onProgress?.(25);
 
-  // Stage 2: Direct atomic upload using uploadBytes
-  try {
-    const fileRef = storageRef(storage, storagePath);
-    const contentType = blob.type || 'image/webp';
-    const metadata = {
-      contentType,
-      customMetadata: {
-        uploaderUid: currentUser.uid,
-        uploadedAt: new Date().toISOString(),
-      },
+  // Stage 2: Resumable upload with live byte-level progress
+  return new Promise<UploadResult>((resolve, reject) => {
+    let uploadTask: UploadTask | null = null;
+    let isSettled = false;
+    let userCancelled = false;
+
+    const cleanup = () => {
+      isSettled = true;
+      if (cancelRef) {
+        cancelRef.current = undefined;
+      }
     };
 
-    onProgress?.(70);
-    const snapshot = await uploadBytes(fileRef, blob, metadata);
-    if (isCancelled) {
-      throw new Error('Image upload was cancelled by user.');
-    }
+    try {
+      const fileRef = storageRef(storage, storagePath);
+      const contentType = blob.type || 'image/webp';
+      const metadata = {
+        contentType,
+        customMetadata: {
+          uploaderUid: currentUser.uid,
+          uploadedAt: new Date().toISOString(),
+        },
+      };
 
-    // Stage 3: Retrieve permanent, authenticated download URL
-    onProgress?.(90);
-    const downloadUrl = await getDownloadURL(snapshot.ref);
-    onProgress?.(100);
+      uploadTask = uploadBytesResumable(fileRef, blob, metadata);
 
-    return {
-      downloadUrl,
-      storagePath,
-    };
-  } catch (err: any) {
-    if (isCancelled || err?.message?.includes('cancelled')) {
-      throw new Error('Image upload was cancelled by user.');
+      if (cancelRef) {
+        cancelRef.current = () => {
+          if (!isSettled) {
+            userCancelled = true;
+            try {
+              uploadTask?.cancel();
+            } catch {}
+            cleanup();
+            reject(new Error('Image upload was cancelled by user.'));
+          }
+        };
+      }
+
+      uploadTask.on(
+        'state_changed',
+        (snapshot) => {
+          if (isSettled) return;
+          if (snapshot.totalBytes > 0) {
+            const rawPct = snapshot.bytesTransferred / snapshot.totalBytes;
+            const scaledPct = Math.min(92, Math.round(25 + rawPct * 67));
+            onProgress?.(scaledPct);
+          }
+        },
+        async (error: any) => {
+          if (isSettled) return;
+          cleanup();
+
+          if (userCancelled) {
+            reject(new Error('Image upload was cancelled by user.'));
+            return;
+          }
+
+          console.error('Firebase Storage upload error:', error);
+          const errorMsg = await formatDetailedStorageError(error, bucketName, storagePath);
+          reject(new Error(errorMsg));
+        },
+        async () => {
+          if (isSettled) return;
+          try {
+            onProgress?.(96);
+            const downloadUrl = await getDownloadURL(uploadTask!.snapshot.ref);
+            onProgress?.(100);
+            cleanup();
+            resolve({
+              downloadUrl,
+              storagePath,
+            });
+          } catch (urlErr: any) {
+            cleanup();
+            console.error('Failed to get download URL from Firebase Storage:', urlErr);
+            const errorMsg = await formatDetailedStorageError(urlErr, bucketName, storagePath);
+            reject(new Error(errorMsg));
+          }
+        }
+      );
+    } catch (err: any) {
+      cleanup();
+      if (userCancelled) {
+        reject(new Error('Image upload was cancelled by user.'));
+        return;
+      }
+      console.error('Failed to initiate Firebase Storage upload:', err);
+      formatDetailedStorageError(err, bucketName, storagePath).then((msg) => reject(new Error(msg)));
     }
-    console.error('Firebase Storage upload failed:', err);
-    throw new Error(formatStorageError(err));
-  } finally {
-    if (cancelRef) {
-      cancelRef.current = undefined;
-    }
-  }
+  });
 }
 
 /**
