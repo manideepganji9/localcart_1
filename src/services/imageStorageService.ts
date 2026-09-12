@@ -179,9 +179,12 @@ export function blobToDataUrl(blob: Blob): Promise<string> {
  * Helper to get Cloudinary configuration from environment variables
  */
 export function getCloudinaryConfig(): { cloudName: string; uploadPreset: string } {
-  const env = (import.meta as any).env || {};
-  const cloudName = String(env.VITE_CLOUDINARY_CLOUD_NAME || '').trim();
-  const uploadPreset = String(env.VITE_CLOUDINARY_UPLOAD_PRESET || '').trim();
+  // Direct compile-time access for Vite environment variables
+  const rawCloud = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME || '';
+  const rawPreset = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET || '';
+
+  const cloudName = String(rawCloud).trim().replace(/^["']|["']$/g, '');
+  const uploadPreset = String(rawPreset).trim().replace(/^["']|["']$/g, '');
 
   return { cloudName, uploadPreset };
 }
@@ -190,6 +193,7 @@ export function getCloudinaryConfig(): { cloudName: string; uploadPreset: string
  * Formats Cloudinary / Storage error messages
  */
 export function formatStorageError(error: any): string {
+  if (!error) return 'Image upload failed. Please try again.';
   const message = error?.message || (typeof error === 'string' ? error : 'Image upload failed.');
   return message;
 }
@@ -212,9 +216,14 @@ export async function uploadImageToStorage(
   }
 
   const { cloudName, uploadPreset } = getCloudinaryConfig();
-  if (!cloudName || !uploadPreset) {
+  if (!cloudName) {
     throw new Error(
-      'Cloudinary configuration missing. Please set VITE_CLOUDINARY_CLOUD_NAME and VITE_CLOUDINARY_UPLOAD_PRESET in your environment variables.'
+      'Cloudinary configuration missing: VITE_CLOUDINARY_CLOUD_NAME is not set. Please set VITE_CLOUDINARY_CLOUD_NAME in your Vercel Project Environment Variables and trigger a redeploy.'
+    );
+  }
+  if (!uploadPreset) {
+    throw new Error(
+      'Cloudinary configuration missing: VITE_CLOUDINARY_UPLOAD_PRESET is not set. Please set VITE_CLOUDINARY_UPLOAD_PRESET in your Vercel Project Environment Variables and trigger a redeploy.'
     );
   }
 
@@ -285,7 +294,13 @@ export async function uploadImageToStorage(
             storagePath: data.public_id || storagePath,
           });
         } else {
-          const errMsg = data.error?.message || `Upload failed with HTTP ${xhr.status}`;
+          let errMsg = data?.error?.message || `Upload failed with HTTP ${xhr.status}`;
+          // Cloudinary responds with "Unknown API key" when the cloud name in the URL does not exist or has a typo
+          if (errMsg.toLowerCase().includes('unknown api key')) {
+            errMsg = `Cloudinary cloud name "${cloudName}" was not recognized. Please verify that VITE_CLOUDINARY_CLOUD_NAME in Vercel settings matches your Cloudinary cloud name (check for typos like double letters).`;
+          } else if (errMsg.toLowerCase().includes('upload preset not found') || (errMsg.toLowerCase().includes('preset') && errMsg.toLowerCase().includes('unsigned'))) {
+            errMsg = `Cloudinary upload preset "${uploadPreset}" was not found or is not set to Unsigned mode in Cloudinary Settings.`;
+          }
           console.error('Cloudinary upload error response:', data);
           reject(new Error(`Cloudinary upload failed: ${errMsg}`));
         }
@@ -308,12 +323,15 @@ export async function uploadImageToStorage(
       reject(new Error('Image upload was cancelled by user.'));
     };
 
+    // Unsigned upload payload: send ONLY file and upload_preset (plus folder)
+    // Never send api_key, api_secret, or signatures
     const formData = new FormData();
     const fileName = (file as File).name || `upload_${Date.now()}.webp`;
     formData.append('file', blob, fileName);
     formData.append('upload_preset', uploadPreset);
-    formData.append('folder', folder);
-    formData.append('tags', `localcart,${currentUser.uid}`);
+    if (folder) {
+      formData.append('folder', folder);
+    }
 
     const uploadUrl = `https://api.cloudinary.com/v1_1/${encodeURIComponent(cloudName)}/image/upload`;
     xhr.open('POST', uploadUrl, true);
