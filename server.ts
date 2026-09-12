@@ -3,17 +3,36 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
-import { getAdminFirestore, verifyAuthToken, type DocumentReference } from './server/firebaseAdmin';
+import { getAdminFirestore, verifyAuthToken, type DocumentReference } from './server/firebaseAdmin.ts';
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const currentDir = typeof __dirname !== 'undefined' ? __dirname : path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
 const PORT = 3000;
 
 app.use(express.json({ limit: '10mb' }));
+
+// Recover original path if Vercel serverless rewrite changed req.url
+app.use((req, res, next) => {
+  if (req.url === '/api' || req.url === '/' || req.url.startsWith('/api?')) {
+    const matchedPath = (req.headers['x-matched-path'] || req.headers['x-forwarded-uri']) as string;
+    if (matchedPath && matchedPath !== '/api' && matchedPath !== '/') {
+      req.url = matchedPath;
+    } else {
+      const matches = req.headers['x-now-route-matches'] as string;
+      if (matches) {
+        const match = matches.match(/(?:^|&)1=([^&]+)/);
+        if (match && match[1]) {
+          const sub = decodeURIComponent(match[1]);
+          req.url = sub.startsWith('/') ? `/api${sub}` : `/api/${sub}`;
+        }
+      }
+    }
+  }
+  next();
+});
 
 // Initialize Gemini API client if API key is available
 const apiKey = process.env.GEMINI_API_KEY || '';
@@ -27,17 +46,17 @@ if (apiKey) {
 }
 
 /**
- * Robust Gemini generation helper: uses fast gemini-3.1-flash-lite as primary for rapid
- * responses, with fallback to gemini-3.8-flash.
+ * Free-tier eligible Gemini models: primary gemini-2.5-flash, fallback gemini-2.5-flash-lite, gemini-2.0-flash
  */
+const GEMINI_MODELS = ['gemini-2.5-flash', 'gemini-2.5-flash-lite', 'gemini-2.0-flash'];
+
 async function generateGeminiContent(options: {
   contents: string;
   config?: any;
 }) {
   if (!aiClient) return null;
-  const models = ['gemini-3.1-flash-lite', 'gemini-3.8-flash'];
   let lastErr: any = null;
-  for (const model of models) {
+  for (const model of GEMINI_MODELS) {
     try {
       const response = await aiClient.models.generateContent({
         model,
@@ -57,15 +76,36 @@ async function generateGeminiContent(options: {
   throw lastErr || new Error('All supported Gemini models failed');
 }
 
+/**
+ * Detects casual greetings, pleasantries, and thank-yous
+ */
+function isCasualGreeting(query: string): { isCasual: boolean; type: 'greeting' | 'thanks' | 'pleasantry' | 'none' } {
+  if (!query || typeof query !== 'string') return { isCasual: false, type: 'none' };
+  const q = query.trim().toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (/^(hi|hello|hey|heya|howdy|sup|greetings|good\s+(morning|afternoon|evening|day))(\s+there|\s+localcart|\s+assistant)?$/i.test(q)) {
+    return { isCasual: true, type: 'greeting' };
+  }
+  if (/^(thanks|thank\s+you|thx|many\s+thanks|thank\s+you\s+so\s+much)$/i.test(q)) {
+    return { isCasual: true, type: 'thanks' };
+  }
+  if (/^(how\s+are\s+you|who\s+are\s+you|what\s+can\s+you\s+do|what\s+is\s+this|help|good\s+to\s+see\s+you)$/i.test(q)) {
+    return { isCasual: true, type: 'pleasantry' };
+  }
+  return { isCasual: false, type: 'none' };
+}
+
+const apiRouter = express.Router();
+
 // API Health Check
-app.get('/api/health', (req, res) => {
+apiRouter.get('/health', (req, res) => {
+  res.json({ status: 'ok', hasGeminiKey: Boolean(apiKey) });
+});
+apiRouter.get('/', (req, res) => {
   res.json({ status: 'ok', hasGeminiKey: Boolean(apiKey) });
 });
 
 // ============================================================================
-// Secure Checkout Endpoint: Server-side inventory decrement & order creation
-// ============================================================================
-app.post('/api/orders/checkout', async (req, res) => {
+apiRouter.post('/orders/checkout', async (req, res) => {
   try {
     const authHeader = req.headers.authorization || '';
     const idToken = authHeader.startsWith('Bearer ') ? authHeader.substring(7) : '';
@@ -304,11 +344,27 @@ app.post('/api/orders/checkout', async (req, res) => {
 });
 
 // AI Concierge Endpoint (Buyer & General Shopping Inquiries)
-app.post('/api/ai/concierge', async (req, res) => {
+apiRouter.post('/ai/concierge', async (req, res) => {
   try {
     const { userQuery, context, userLocation } = req.body;
     if (!userQuery) {
       return res.status(400).json({ error: 'userQuery is required' });
+    }
+
+    const casual = isCasualGreeting(userQuery);
+    if (context?.intent === 'CASUAL' || casual.isCasual) {
+      const type = casual.type || 'greeting';
+      let msg = `Hello! I'm your LocalCart Shopping Assistant. How can I help you discover local shops, fresh food, or handcrafted products in your area today?`;
+      if (type === 'thanks') {
+        msg = `You're very welcome! Let me know if you're looking for any products, local stores, or order updates.`;
+      } else if (type === 'pleasantry') {
+        msg = `I'm your LocalCart Shopping Assistant for ${userLocation?.city || 'Hyderabad'}. I can help you find fresh food, baked goods, artisan crafts, check prices, and track your orders.`;
+      }
+      return res.json({
+        message: msg,
+        suggestedCategories: ['Bakery & Desserts', 'Handmade Jewellery', 'Home Decor & Art'],
+        quickReplies: ['What can I find nearby?', 'What is on sale?']
+      });
     }
 
     // If Gemini client is active, generate natural language answer strictly grounded in database facts
@@ -410,7 +466,7 @@ STRICT GROUNDING INSTRUCTIONS:
 });
 
 // AI Seller Onboarding Info Extraction
-app.post('/api/ai/seller-onboarding', async (req, res) => {
+apiRouter.post('/ai/seller-onboarding', async (req, res) => {
   try {
     const { productsText, businessTypeText } = req.body;
     if (aiClient) {
@@ -461,7 +517,7 @@ Generate a structured business profile in STRICT JSON:
 });
 
 // AI Product Description Generator
-app.post('/api/ai/product-description', async (req, res) => {
+apiRouter.post('/ai/product-description', async (req, res) => {
   try {
     const { productName, category, keyFeatures } = req.body;
     if (aiClient) {
@@ -551,6 +607,11 @@ function buildRelevantSellerContext(
   orders: any[] = [],
   metrics: ReturnType<typeof computeSellerMetrics>
 ): string {
+  const casual = isCasualGreeting(userQuery);
+  if (casual.isCasual) {
+    return `STORE: ${sellerProfile?.businessName || 'Store'} (${sellerProfile?.businessCategory || 'General'}, in ${sellerProfile?.location?.area || ''}, ${sellerProfile?.location?.city || 'India'})`;
+  }
+
   const q = userQuery.toLowerCase();
   const sections: string[] = [];
 
@@ -561,10 +622,10 @@ function buildRelevantSellerContext(
   const isStock = q.includes('stock') || q.includes('restock') || q.includes('inventory') || q.includes('running out') || q.includes('unit');
   const isOrder = q.includes('order') || q.includes('pending') || q.includes('deliver') || q.includes('dispatch') || q.includes('today') || q.includes('status');
   const isSales = q.includes('sale') || q.includes('revenue') || q.includes('sold') || q.includes('income') || q.includes('money') || q.includes('best-selling') || q.includes('top product') || q.includes('top selling');
-  const isProduct = q.includes('product') || q.includes('item') || q.includes('catalog') || q.includes('price') || q.includes('pricing') || q.includes('discount');
+  const isProduct = q.includes('what product') || q.includes('my product') || q.includes('product') || q.includes('item') || q.includes('catalog') || q.includes('price') || q.includes('pricing') || q.includes('discount');
   const isCustomer = q.includes('customer') || q.includes('buyer') || q.includes('who bought');
 
-  if (isStock || (!isOrder && !isSales && !isCustomer)) {
+  if (isStock || isProduct || (!isOrder && !isSales && !isCustomer)) {
     sections.push(`PRODUCTS & INVENTORY (${products.length} total products listed):`);
     if (metrics.lowStock.length > 0) {
       sections.push(`- Low Stock Items (≤5 units): ${metrics.lowStock.map(p => `"${p.name}" (${p.stockQuantity} left, ₹${p.finalPrice})`).join('; ')}`);
@@ -577,8 +638,12 @@ function buildRelevantSellerContext(
     if (metrics.highestStock) {
       sections.push(`- Highest Stock Item: "${metrics.highestStock.name}" (${metrics.highestStock.stockQuantity} units)`);
     }
-    const sampleProducts = products.slice(0, 12).map(p => `${p.name} (₹${p.finalPrice}, Stock: ${p.stockQuantity})`).join(', ');
-    sections.push(`- Catalog summary: ${sampleProducts}`);
+    if (products.length > 0) {
+      const itemsList = products.map(p => `• ${p.name} (₹${p.finalPrice}, Stock: ${p.stockQuantity}${p.inStock ? '' : ' - Out of Stock'})`).join('\n');
+      sections.push(`- Listed Products:\n${itemsList}`);
+    } else {
+      sections.push(`- Listed Products: No products listed yet`);
+    }
   }
 
   if (isOrder || isSales || (!isStock && !isProduct)) {
@@ -617,32 +682,47 @@ function buildRelevantSellerContext(
 }
 
 function getSuggestedQuestions(userQuery: string, metrics: ReturnType<typeof computeSellerMetrics>): string[] {
+  const casual = isCasualGreeting(userQuery);
+  if (casual.isCasual) {
+    return [
+      'What products do I have?',
+      'What products are low in stock?',
+      'How many orders do I have?'
+    ];
+  }
   const q = userQuery.toLowerCase();
+  if (q.includes('what product') || q.includes('my product') || q.includes('catalog')) {
+    return [
+      'What products are low in stock?',
+      'Which product is selling the most?',
+      'How many orders do I have?'
+    ];
+  }
   if (q.includes('stock') || q.includes('restock') || q.includes('inventory')) {
     return [
+      'What products do I have?',
       'Which product has the highest stock?',
-      'Show my total sales',
-      'How can I improve my sales?'
+      'Show my total sales'
     ];
   }
   if (q.includes('order') || q.includes('pending') || q.includes('deliver')) {
     return [
+      'What products do I have?',
       'What products are low in stock?',
-      'Which product is selling the most?',
       'What is my total sales?'
     ];
   }
   if (q.includes('sale') || q.includes('revenue') || q.includes('selling the most')) {
     return [
+      'What products do I have?',
       'What products are low in stock?',
-      'How many orders did I receive?',
-      'Tips to get more customers'
+      'How many orders did I receive?'
     ];
   }
   return [
+    'What products do I have?',
     'What products are low in stock?',
-    'Which product is selling the most?',
-    'Give me a summary of my store'
+    'How many orders do I have?'
   ];
 }
 
@@ -653,8 +733,26 @@ function computeDeterministicAnswer(
   metrics: ReturnType<typeof computeSellerMetrics>,
   sellerProfile: any
 ): string {
+  const casual = isCasualGreeting(userQuery);
+  if (casual.isCasual) {
+    if (casual.type === 'greeting') {
+      return `Hello! I am your LocalCart Seller Assistant. How can I help you manage ${sellerProfile?.businessName || 'your store'} today?`;
+    }
+    if (casual.type === 'thanks') {
+      return `You're welcome! Let me know if you need anything else to manage ${sellerProfile?.businessName || 'your store'}.`;
+    }
+    return `I'm here to help you manage ${sellerProfile?.businessName || 'your store'}. You can ask about your products, inventory levels, orders, or sales performance.`;
+  }
+
   const qLower = userQuery.toLowerCase();
-  if (qLower.includes('low in stock') || qLower.includes('low stock') || qLower.includes('restock') || qLower.includes('running out')) {
+  if (qLower.includes('what product') || qLower.includes('my product') || qLower.includes('which product') || qLower.includes('list product') || qLower === 'products' || qLower === 'all products' || qLower.includes('show my product') || qLower.includes('show products')) {
+    if (products.length === 0) {
+      return `You currently have no products listed in ${sellerProfile?.businessName || 'your store'}. You can add new products from your inventory dashboard.`;
+    } else {
+      return `Here are the products currently listed in ${sellerProfile?.businessName || 'your store'} (${products.length} total):\n` +
+        products.map(p => `• ${p.name}: ₹${p.finalPrice} (${p.stockQuantity} in stock${p.inStock ? '' : ' - Out of Stock'})`).join('\n');
+    }
+  } else if (qLower.includes('low in stock') || qLower.includes('low stock') || qLower.includes('restock') || qLower.includes('running out')) {
     if (metrics.lowStock.length > 0) {
       return `You have ${metrics.lowStock.length} product(s) running low in stock (5 or fewer units remaining):\n` +
         metrics.lowStock.map(p => `• ${p.name}: ${p.stockQuantity} remaining (₹${p.finalPrice})`).join('\n') +
@@ -716,14 +814,14 @@ function computeDeterministicAnswer(
       `3. Quickly accept pending orders — fast response times build customer loyalty in your local neighborhood.\n` +
       `4. Share your public store link on WhatsApp groups and local community channels.`;
   } else {
-    return `I am your Seller AI Assistant for ${sellerProfile?.businessName || 'your store'}. ` +
+    return `I'm your LocalCart Assistant for ${sellerProfile?.businessName || 'your store'}. ` +
       `You currently have ${products.length} products and ${orders.length} total orders recorded in your store database. ` +
-      `Feel free to ask about your stock levels, best-selling items, pending orders, revenue, or tips to improve sales!`;
+      `Feel free to ask about your products, stock levels, orders, or sales revenue.`;
   }
 }
 
 // AI Seller Assistant Streaming Endpoint (Server-Sent Events)
-app.post('/api/ai/seller-assistant/stream', async (req, res) => {
+apiRouter.post('/ai/seller-assistant/stream', async (req, res) => {
   try {
     const { userQuery, sellerProfile, products = [], orders = [], history = [] } = req.body;
 
@@ -739,6 +837,20 @@ app.post('/api/ai/seller-assistant/stream', async (req, res) => {
     const sendEvent = (data: any) => {
       res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
+
+    const casual = isCasualGreeting(userQuery);
+    if (casual.isCasual) {
+      let msg = `Hello! I am your LocalCart Seller Assistant. How can I help you manage ${sellerProfile?.businessName || 'your store'} today?`;
+      if (casual.type === 'thanks') {
+        msg = `You're welcome! Let me know if you need anything else to manage ${sellerProfile?.businessName || 'your store'}.`;
+      } else if (casual.type === 'pleasantry') {
+        msg = `I'm here to help you manage ${sellerProfile?.businessName || 'your store'}. You can ask about your products, inventory levels, orders, or sales performance.`;
+      }
+      sendEvent({ chunk: msg });
+      sendEvent({ done: true, suggestedQuestions: ['What products do I have?', 'What products are low in stock?', 'How many orders do I have?'] });
+      res.end();
+      return;
+    }
 
     const metrics = computeSellerMetrics(products, orders);
     const relevantContext = buildRelevantSellerContext(userQuery, sellerProfile, products, orders, metrics);
@@ -764,7 +876,7 @@ OPERATIONAL RULES:
 4. SIMPLE VOCABULARY: Use simple everyday words (Store, Products, Stock, Orders, Customers, Sales). Never use pretentious jargon.
 5. Provide a direct, helpful, natural language response with clean formatting and bullet points where useful. Do NOT output JSON.`;
 
-        const models = ['gemini-3.1-flash-lite', 'gemini-3.8-flash'];
+        const models = GEMINI_MODELS;
         let streamSuccess = false;
 
         for (const model of models) {
@@ -817,12 +929,26 @@ OPERATIONAL RULES:
 });
 
 // AI Seller Assistant Endpoint (Standard Fast JSON Endpoint Grounded strictly in seller's live Firestore store data)
-app.post('/api/ai/seller-assistant', async (req, res) => {
+apiRouter.post('/ai/seller-assistant', async (req, res) => {
   try {
     const { userQuery, sellerProfile, products = [], orders = [], history = [] } = req.body;
 
     if (!userQuery || typeof userQuery !== 'string') {
       return res.status(400).json({ error: 'userQuery is required' });
+    }
+
+    const casual = isCasualGreeting(userQuery);
+    if (casual.isCasual) {
+      let msg = `Hello! I am your LocalCart Seller Assistant. How can I help you manage ${sellerProfile?.businessName || 'your store'} today?`;
+      if (casual.type === 'thanks') {
+        msg = `You're welcome! Let me know if you need anything else to manage ${sellerProfile?.businessName || 'your store'}.`;
+      } else if (casual.type === 'pleasantry') {
+        msg = `I'm here to help you manage ${sellerProfile?.businessName || 'your store'}. You can ask about your products, inventory levels, orders, or sales performance.`;
+      }
+      return res.json({
+        message: msg,
+        suggestedQuestions: ['What products do I have?', 'What products are low in stock?', 'How many orders do I have?']
+      });
     }
 
     const metrics = computeSellerMetrics(products, orders);
@@ -881,6 +1007,10 @@ Return valid JSON with:
   }
 });
 
+// Mount router on both /api and / to handle Vercel rewrites gracefully
+app.use('/api', apiRouter);
+app.use('/', apiRouter);
+
 // Mount Vite in development or serve static in production
 async function setupViteMiddleware() {
   if (process.env.NODE_ENV !== 'production') {
@@ -890,7 +1020,7 @@ async function setupViteMiddleware() {
       appType: 'spa',
     });
     app.use(vite.middlewares);
-  } else {
+  } else if (!process.env.VERCEL) {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
@@ -903,7 +1033,7 @@ async function setupViteMiddleware() {
   });
 }
 
-if (process.env.VERCEL !== '1') {
+if (!process.env.VERCEL) {
   setupViteMiddleware();
 }
 

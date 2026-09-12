@@ -2,6 +2,7 @@ import { Product, SellerProfile, Order, LocationInfo } from '../types';
 
 export interface GroundedBuyerContext {
   intent: 
+    | 'CASUAL'
     | 'PRODUCT_PRICE'
     | 'PRODUCT_STOCK'
     | 'PRODUCT_AVAILABILITY'
@@ -41,6 +42,24 @@ function normalize(str: string): string {
 }
 
 /**
+ * Detects casual greetings, pleasantries, and thank-yous
+ */
+export function isCasualGreeting(query: string): { isCasual: boolean; type: 'greeting' | 'thanks' | 'pleasantry' | 'none' } {
+  if (!query || typeof query !== 'string') return { isCasual: false, type: 'none' };
+  const q = query.trim().toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (/^(hi|hello|hey|heya|howdy|sup|greetings|good\s+(morning|afternoon|evening|day))(\s+there|\s+localcart|\s+assistant)?$/i.test(q)) {
+    return { isCasual: true, type: 'greeting' };
+  }
+  if (/^(thanks|thank\s+you|thx|many\s+thanks|thank\s+you\s+so\s+much)$/i.test(q)) {
+    return { isCasual: true, type: 'thanks' };
+  }
+  if (/^(how\s+are\s+you|who\s+are\s+you|what\s+can\s+you\s+do|what\s+is\s+this|help|good\s+to\s+see\s+you)$/i.test(q)) {
+    return { isCasual: true, type: 'pleasantry' };
+  }
+  return { isCasual: false, type: 'none' };
+}
+
+/**
  * Checks if query words match a target string
  */
 function matchesKeywords(target: string, queryWords: string[]): boolean {
@@ -60,6 +79,22 @@ export function analyzeBuyerQuery(
   buyerOrders: Order[],
   userLocation: { city: string; area?: string }
 ): GroundedBuyerContext {
+  // Check for conversational intent first (Hi, Hello, Thanks, etc.)
+  const casual = isCasualGreeting(userQuery);
+  if (casual.isCasual) {
+    let reply = "Hi! 👋 What are you looking for today?";
+    if (casual.type === 'thanks') reply = "You're welcome! Let me know if you need anything.";
+    if (casual.type === 'pleasantry') reply = "I'm doing well, thank you! What local creations or shops are you looking for today?";
+    return {
+      intent: 'CASUAL',
+      matchedProducts: [],
+      matchedSellers: [],
+      matchedOrders: [],
+      filtersApplied: {},
+      summaryFact: reply,
+    };
+  }
+
   const qClean = normalize(userQuery);
   const words = qClean.split(' ').filter(w => w.length > 0);
 

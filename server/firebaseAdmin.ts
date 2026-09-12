@@ -1,6 +1,6 @@
-import { initializeApp, getApps, cert, applicationDefault, App, Credential } from 'firebase-admin/app';
+import { initializeApp, getApps, cert, applicationDefault, type App, type Credential } from 'firebase-admin/app';
 import { getFirestore, Firestore, DocumentReference } from 'firebase-admin/firestore';
-import { getAuth, DecodedIdToken } from 'firebase-admin/auth';
+import { getAuth, type DecodedIdToken } from 'firebase-admin/auth';
 
 let adminApp: App | null = null;
 

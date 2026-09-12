@@ -1,5 +1,5 @@
 import { Product, SellerProfile, Order } from '../types';
-import { analyzeBuyerQuery, GroundedBuyerContext } from './aiDatabaseMatcher';
+import { analyzeBuyerQuery, GroundedBuyerContext, isCasualGreeting } from './aiDatabaseMatcher';
 
 export interface BuyerAISearchResult {
   message: string;
@@ -54,6 +54,15 @@ export async function searchProductsWithAI(
     buyerOrders,
     userLocation
   );
+
+  // For casual conversation (Hi, Hello, Thanks, etc.), return natural greeting immediately
+  if (context.intent === 'CASUAL') {
+    return {
+      message: context.summaryFact,
+      matchedProductIds: [],
+      suggestedCategories: ['Bakery & Desserts', 'Handmade Jewellery', 'Boutique & Fashion'],
+    };
+  }
 
   let aiMessage = context.summaryFact;
   let suggestedCategories = context.filtersApplied.category ? [context.filtersApplied.category] : [];
@@ -309,6 +318,19 @@ export async function askSellerAIAssistantStream(params: {
 }): Promise<void> {
   const { userQuery, sellerProfile, products, orders, history = [], onChunk, onDone } = params;
 
+  // For casual conversation (Hi, Hello, Thanks, etc.), reply naturally and instantly
+  const casual = isCasualGreeting(userQuery);
+  if (casual.isCasual) {
+    let reply = "Hi! How can I help with your store today?";
+    if (casual.type === 'thanks') reply = "You're welcome! Let me know if you need anything for your store.";
+    if (casual.type === 'pleasantry') reply = "I'm doing well, thank you! How can I help you manage your store today?";
+    onChunk(reply);
+    if (onDone) {
+      onDone(['What products are low in stock?', 'What products do I have?', 'How many orders do I have?']);
+    }
+    return;
+  }
+
   try {
     const res = await fetch('/api/ai/seller-assistant/stream', {
       method: 'POST',
@@ -441,8 +463,35 @@ export async function askSellerAIAssistant(params: {
   const topSales = Object.entries(productSalesMap).sort((a, b) => b[1].quantity - a[1].quantity);
   const qLower = userQuery.toLowerCase();
 
+  const casual = isCasualGreeting(userQuery);
+  if (casual.isCasual) {
+    if (casual.type === 'greeting') {
+      return {
+        message: `Hello! I am your LocalCart Seller Assistant. How can I help you manage ${sellerProfile.businessName || 'your store'} today?`,
+        suggestedQuestions: ['What products do I have?', 'What products are low in stock?', 'How many orders do I have?'],
+      };
+    }
+    if (casual.type === 'thanks') {
+      return {
+        message: `You're welcome! Let me know if you need anything else to manage ${sellerProfile.businessName || 'your store'}.`,
+        suggestedQuestions: ['What products do I have?', 'What products are low in stock?'],
+      };
+    }
+    return {
+      message: `I'm here to help you manage ${sellerProfile.businessName || 'your store'}. You can ask about your products, inventory levels, orders, or sales performance.`,
+      suggestedQuestions: ['What products do I have?', 'What products are low in stock?', 'How many orders do I have?'],
+    };
+  }
+
   let message = '';
-  if (qLower.includes('low in stock') || qLower.includes('low stock') || qLower.includes('restock') || qLower.includes('running out')) {
+  if (qLower.includes('what product') || qLower.includes('my product') || qLower.includes('which product') || qLower.includes('list product') || qLower === 'products' || qLower === 'all products') {
+    if (products.length === 0) {
+      message = `You currently have no products listed in ${sellerProfile.businessName}. You can add new products from your inventory dashboard.`;
+    } else {
+      message = `Here are the products currently listed in ${sellerProfile.businessName} (${products.length} total):\n` +
+        products.map(p => `• ${p.name}: ₹${p.finalPrice} (${p.stockQuantity} in stock${p.inStock ? '' : ' - Out of Stock'})`).join('\n');
+    }
+  } else if (qLower.includes('low in stock') || qLower.includes('low stock') || qLower.includes('restock') || qLower.includes('running out')) {
     if (lowStock.length > 0) {
       message = `You have ${lowStock.length} product(s) with low stock (5 or fewer units remaining):\n` +
         lowStock.map(p => `• ${p.name}: ${p.stockQuantity} in stock (₹${p.finalPrice})`).join('\n') +
@@ -457,17 +506,17 @@ export async function askSellerAIAssistant(params: {
       const best = topSales[0];
       message = `Your best-selling product is "${best[0]}" with ${best[1].quantity} units ordered (₹${best[1].revenue} in sales).`;
     }
-  } else if (qLower.includes('how many order') || qLower.includes('orders did i receive') || qLower.includes('today')) {
+  } else if (qLower.includes('how many order') || qLower.includes('orders did i receive') || qLower.includes('today') || qLower.includes('order count')) {
     message = `Order summary for ${sellerProfile.businessName}:\n• Total orders: ${orders.length}\n• Pending approval: ${pendingOrders.length}\n• In progress: ${activeOrders.length}\n• Completed: ${deliveredOrders.length}`;
   } else if (qLower.includes('revenue') || qLower.includes('sales') || qLower.includes('income')) {
     message = `Your total sales revenue is ₹${totalRevenue.toLocaleString()} across ${validOrders.length} orders.`;
   } else {
-    message = `Based on your live store data: You currently have ${products.length} products listed and ${orders.length} orders recorded. Pending orders: ${pendingOrders.length}. Ask any question about your stock, sales, revenue, or business advice.`;
+    message = `I'm your LocalCart Assistant for ${sellerProfile.businessName}. You currently have ${products.length} products listed and ${orders.length} orders recorded. Ask me about your products, stock levels, orders, or sales revenue.`;
   }
 
   return {
     message,
-    suggestedQuestions: ['What products are low in stock?', 'Show total sales', 'How many orders?'],
+    suggestedQuestions: ['What products do I have?', 'What products are low in stock?', 'How many orders do I have?'],
   };
 }
 
