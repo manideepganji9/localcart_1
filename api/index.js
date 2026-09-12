@@ -6,14 +6,12 @@ import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
 
 // server/firebaseAdmin.ts
-import { initializeApp, getApps, cert, applicationDefault } from "firebase-admin/app";
-import { getFirestore } from "firebase-admin/firestore";
-import { getAuth } from "firebase-admin/auth";
 var adminApp = null;
-function getFirebaseAdminApp() {
+async function getFirebaseAdminApp() {
   if (adminApp) {
     return adminApp;
   }
+  const { initializeApp, getApps, cert, applicationDefault } = await import("firebase-admin/app");
   const existingApps = getApps();
   if (existingApps.length > 0 && existingApps[0]) {
     adminApp = existingApps[0];
@@ -70,12 +68,14 @@ function getFirebaseAdminApp() {
   });
   return adminApp;
 }
-function getAdminFirestore() {
-  const app2 = getFirebaseAdminApp();
+async function getAdminFirestore() {
+  const app2 = await getFirebaseAdminApp();
+  const { getFirestore } = await import("firebase-admin/firestore");
   return getFirestore(app2);
 }
 async function verifyAuthToken(idToken) {
-  const app2 = getFirebaseAdminApp();
+  const app2 = await getFirebaseAdminApp();
+  const { getAuth } = await import("firebase-admin/auth");
   return getAuth(app2).verifyIdToken(idToken);
 }
 
@@ -200,7 +200,7 @@ apiRouter.post("/orders/checkout", async (req, res) => {
         });
       }
     }
-    const db = getAdminFirestore();
+    const db = await getAdminFirestore();
     const orderResult = await db.runTransaction(async (transaction) => {
       let orderId = `order-${Date.now()}`;
       if (idempotencyKey && typeof idempotencyKey === "string") {

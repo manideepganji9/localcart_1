@@ -1,8 +1,4 @@
-import { initializeApp, getApps, cert, applicationDefault, type App, type Credential } from 'firebase-admin/app';
-import { getFirestore, Firestore, DocumentReference } from 'firebase-admin/firestore';
-import { getAuth, type DecodedIdToken } from 'firebase-admin/auth';
-
-let adminApp: App | null = null;
+let adminApp: any = null;
 
 /**
  * Lazily initialize Firebase Admin SDK.
@@ -11,10 +7,12 @@ let adminApp: App | null = null;
  * 2. GOOGLE_APPLICATION_CREDENTIALS: file path to service account json
  * 3. Individual variables: FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY
  */
-export function getFirebaseAdminApp(): App {
+export async function getFirebaseAdminApp(): Promise<any> {
   if (adminApp) {
     return adminApp;
   }
+
+  const { initializeApp, getApps, cert, applicationDefault } = await import('firebase-admin/app');
 
   const existingApps = getApps();
   if (existingApps.length > 0 && existingApps[0]) {
@@ -27,7 +25,7 @@ export function getFirebaseAdminApp(): App {
     process.env.FIREBASE_SERVICE_ACCOUNT ||
     '';
 
-  let credential: Credential | undefined;
+  let credential: any;
 
   if (serviceAccountRaw) {
     try {
@@ -86,14 +84,18 @@ export function getFirebaseAdminApp(): App {
   return adminApp;
 }
 
-export function getAdminFirestore(): Firestore {
-  const app = getFirebaseAdminApp();
+export async function getAdminFirestore(): Promise<any> {
+  const app = await getFirebaseAdminApp();
+  const { getFirestore } = await import('firebase-admin/firestore');
   return getFirestore(app);
 }
 
-export async function verifyAuthToken(idToken: string): Promise<DecodedIdToken> {
-  const app = getFirebaseAdminApp();
+export async function verifyAuthToken(idToken: string): Promise<any> {
+  const app = await getFirebaseAdminApp();
+  const { getAuth } = await import('firebase-admin/auth');
   return getAuth(app).verifyIdToken(idToken);
 }
 
-export type { DocumentReference, Firestore, DecodedIdToken };
+export type DocumentReference = any;
+export type Firestore = any;
+export type DecodedIdToken = any;

@@ -160,7 +160,7 @@ apiRouter.post('/orders/checkout', async (req, res) => {
       }
     }
 
-    const db = getAdminFirestore();
+    const db = await getAdminFirestore();
 
     // 2. Execute atomic Firestore transaction
     const orderResult = await db.runTransaction(async (transaction) => {
