@@ -124,7 +124,7 @@ export const BusinessRoomView: React.FC<BusinessRoomViewProps> = ({
               <div className="space-y-1">
                 <div className="flex items-center gap-2">
                   <span className="text-[10px] uppercase tracking-wider bg-white/95 text-stone-900 px-2.5 py-0.5 font-mono font-bold rounded-md">
-                    {seller.businessCategory}
+                    {seller.businessCategory || seller.whatYouSell}
                   </span>
                   <span className="text-[10px] uppercase tracking-wider text-amber-300 bg-stone-950/60 border border-white/20 px-2.5 py-0.5 font-mono rounded-md flex items-center gap-1">
                     <ShieldCheck className="h-3 w-3 text-amber-400" />

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useStore } from '../../context/StoreContext';
-import { PRODUCT_CATEGORIES, POPULAR_CITIES } from '../../constants/config';
+import { POPULAR_CITIES } from '../../constants/config';
 import {
   Store,
   MapPin,
@@ -10,6 +10,8 @@ import {
   ExternalLink,
   Save,
   CheckCircle2,
+  AlertCircle,
+  Loader2,
   Image,
   Phone,
   Mail,
@@ -23,6 +25,7 @@ import {
   uploadStoreBanner,
   deleteStorageImage,
   DEFAULT_STORE_PHOTO,
+  DEFAULT_STORE_BANNER,
 } from '../../services/imageStorageService';
 
 interface SellerBusinessRoomProps {
@@ -37,7 +40,7 @@ export const SellerBusinessRoom: React.FC<SellerBusinessRoomProps> = ({ onNaviga
 
   const [businessName, setBusinessName] = useState(seller?.businessName || '');
   const [tagline, setTagline] = useState(seller?.tagline || '');
-  const [businessCategory, setBusinessCategory] = useState(seller?.businessCategory || 'Bakery & Desserts');
+  const [businessCategory, setBusinessCategory] = useState(seller?.businessCategory || seller?.whatYouSell || 'Bakery & Desserts');
   const [businessDescription, setBusinessDescription] = useState(seller?.businessDescription || '');
   const [bannerUrl, setBannerUrl] = useState(seller?.bannerUrl || '');
   const [storePhotoUrl, setStorePhotoUrl] = useState(seller?.storePhotoUrl || seller?.logoUrl || '');
@@ -56,13 +59,15 @@ export const SellerBusinessRoom: React.FC<SellerBusinessRoomProps> = ({ onNaviga
   const [baseDeliveryFee, setBaseDeliveryFee] = useState(seller?.deliveryOptions?.baseDeliveryFee || 50);
   const [freeDeliveryAbove, setFreeDeliveryAbove] = useState(seller?.deliveryOptions?.freeDeliveryAbove || 1500);
 
+  const [isSaving, setIsSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     if (seller) {
       setBusinessName(seller.businessName || '');
       setTagline(seller.tagline || '');
-      setBusinessCategory(seller.businessCategory || 'Bakery & Desserts');
+      setBusinessCategory(seller.businessCategory || seller.whatYouSell || 'Bakery & Desserts');
       setBusinessDescription(seller.businessDescription || '');
       setBannerUrl(seller.bannerUrl || '');
       setStorePhotoUrl(seller.storePhotoUrl || seller.logoUrl || '');
@@ -75,7 +80,7 @@ export const SellerBusinessRoom: React.FC<SellerBusinessRoomProps> = ({ onNaviga
       if (seller.location?.address) setAddress(seller.location.address);
       if (seller.serviceRadiusKm) setServiceRadiusKm(seller.serviceRadiusKm);
     }
-  }, [seller?.id, seller?.storePhotoUrl, seller?.logoUrl, seller?.bannerUrl, seller?.businessName]);
+  }, [seller?.id, seller?.storePhotoUrl, seller?.logoUrl, seller?.bannerUrl, seller?.businessName, seller?.businessCategory, seller?.whatYouSell]);
 
   if (!seller) {
     return (
@@ -85,38 +90,50 @@ export const SellerBusinessRoom: React.FC<SellerBusinessRoomProps> = ({ onNaviga
     );
   }
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    updateSellerProfile({
-      id: seller.id,
-      businessName,
-      tagline,
-      businessCategory,
-      businessDescription,
-      bannerUrl: bannerUrl || seller.bannerUrl,
-      storePhotoUrl: storePhotoUrl || logoUrl || seller.storePhotoUrl || seller.logoUrl,
-      logoUrl: logoUrl || storePhotoUrl || seller.logoUrl || seller.storePhotoUrl,
-      openingHours,
-      contactPhone,
-      contactEmail,
-      serviceRadiusKm,
-      location: {
-        ...seller.location,
-        city,
-        area,
-        address
-      },
-      deliveryOptions: {
-        sellerDelivery,
-        thirdParty,
-        buyerPickup,
-        baseDeliveryFee: Number(baseDeliveryFee),
-        freeDeliveryAbove: Number(freeDeliveryAbove)
-      }
-    });
+    setIsSaving(true);
+    setSaveError(null);
 
-    setSavedSuccess(true);
-    setTimeout(() => setSavedSuccess(false), 3000);
+    try {
+      await updateSellerProfile({
+        id: seller.id,
+        businessName,
+        tagline,
+        businessCategory,
+        whatYouSell: businessCategory,
+        businessDescription,
+        bannerUrl: bannerUrl || seller.bannerUrl || DEFAULT_STORE_BANNER,
+        storePhotoUrl: storePhotoUrl || logoUrl || seller.storePhotoUrl || seller.logoUrl || DEFAULT_STORE_PHOTO,
+        logoUrl: logoUrl || storePhotoUrl || seller.logoUrl || seller.storePhotoUrl || DEFAULT_STORE_PHOTO,
+        openingHours,
+        contactPhone,
+        contactEmail,
+        serviceRadiusKm,
+        location: {
+          ...seller.location,
+          city,
+          area,
+          address
+        },
+        deliveryOptions: {
+          sellerDelivery,
+          thirdParty,
+          buyerPickup,
+          baseDeliveryFee: Number(baseDeliveryFee),
+          freeDeliveryAbove: Number(freeDeliveryAbove)
+        }
+      });
+
+      setSavedSuccess(true);
+      setTimeout(() => setSavedSuccess(false), 3500);
+    } catch (err: any) {
+      console.error('Failed to save store profile changes:', err);
+      setSaveError(err?.message || 'Failed to save changes to database. Please retry.');
+      setTimeout(() => setSaveError(null), 5000);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -151,13 +168,20 @@ export const SellerBusinessRoom: React.FC<SellerBusinessRoomProps> = ({ onNaviga
         </div>
       )}
 
+      {saveError && (
+        <div className="p-3.5 bg-rose-950/70 border border-rose-800 text-rose-200 text-xs flex items-center gap-2 font-mono">
+          <AlertCircle className="h-4 w-4 text-rose-400 shrink-0" />
+          <span>{saveError}</span>
+        </div>
+      )}
+
       {/* Live Storefront Preview Header Card */}
       <div className="border border-[#FFFFFF18] bg-[#121212] overflow-hidden">
         <div className="relative h-48 w-full bg-[#181818]">
           <img
-            src={bannerUrl || seller.bannerUrl}
+            src={bannerUrl || seller.bannerUrl || DEFAULT_STORE_BANNER}
             alt="Banner preview"
-            className="w-full h-full object-cover grayscale contrast-115"
+            className="w-full h-full object-cover"
           />
           <div className="absolute inset-0 bg-gradient-to-t from-[#0C0C0C] via-[#0C0C0C]/50 to-transparent"></div>
           
@@ -201,7 +225,7 @@ export const SellerBusinessRoom: React.FC<SellerBusinessRoomProps> = ({ onNaviga
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-[9px] uppercase tracking-wider text-[#808080] font-mono mb-1.5">
-                Business Room Legal / Public Name *
+                Store / Business Name *
               </label>
               <input
                 type="text"
@@ -214,25 +238,22 @@ export const SellerBusinessRoom: React.FC<SellerBusinessRoomProps> = ({ onNaviga
 
             <div>
               <label className="block text-[9px] uppercase tracking-wider text-[#808080] font-mono mb-1.5">
-                Seller Category / Primary Specialty
+                What do you sell? *
               </label>
-              <select
+              <input
+                type="text"
                 value={businessCategory}
                 onChange={e => setBusinessCategory(e.target.value)}
+                placeholder="e.g. Handmade Cakes, Pastries & Cupcakes"
                 className="w-full px-3.5 py-2.5 bg-[#181818] border border-[#FFFFFF15] text-xs text-white focus:outline-none focus:border-[#E5C392]"
-              >
-                {PRODUCT_CATEGORIES.map(cat => (
-                  <option key={cat.id} value={cat.name}>
-                    {cat.name}
-                  </option>
-                ))}
-              </select>
+                required
+              />
             </div>
           </div>
 
           <div>
             <label className="block text-[9px] uppercase tracking-wider text-[#808080] font-mono mb-1.5">
-              Curatorial Tagline (One-sentence premise)
+              Store Tagline (One-sentence overview)
             </label>
             <input
               type="text"
@@ -244,7 +265,7 @@ export const SellerBusinessRoom: React.FC<SellerBusinessRoomProps> = ({ onNaviga
 
           <div>
             <label className="block text-[9px] uppercase tracking-wider text-[#808080] font-mono mb-1.5">
-              Seller Story & Description (Philosophy, Sourcing, Heritage)
+              Store Description & Background
             </label>
             <textarea
               rows={3}
@@ -404,14 +425,14 @@ export const SellerBusinessRoom: React.FC<SellerBusinessRoomProps> = ({ onNaviga
                 onChange={e => setBuyerPickup(e.target.checked)}
                 className="accent-[#E5C392]"
               />
-              <span className="font-mono text-[11px] text-[#CCC]">Patron Studio Pickup</span>
+              <span className="font-mono text-[11px] text-[#CCC]">Customer Store Pickup</span>
             </label>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">
             <div>
               <label className="block text-[9px] uppercase tracking-wider text-[#808080] font-mono mb-1.5">
-                Standard Dispatch Fee (₹)
+                Standard Delivery Fee (₹)
               </label>
               <input
                 type="number"
@@ -423,7 +444,7 @@ export const SellerBusinessRoom: React.FC<SellerBusinessRoomProps> = ({ onNaviga
 
             <div>
               <label className="block text-[9px] uppercase tracking-wider text-[#808080] font-mono mb-1.5">
-                Complimentary Delivery Threshold (₹)
+                Free Delivery Threshold (₹)
               </label>
               <input
                 type="number"
@@ -435,7 +456,7 @@ export const SellerBusinessRoom: React.FC<SellerBusinessRoomProps> = ({ onNaviga
 
             <div>
               <label className="block text-[9px] uppercase tracking-wider text-[#808080] font-mono mb-1.5">
-                Coverage Perimeter
+                Delivery Radius
               </label>
               <select
                 value={serviceRadiusKm}
@@ -446,7 +467,7 @@ export const SellerBusinessRoom: React.FC<SellerBusinessRoomProps> = ({ onNaviga
                 <option value={10}>Within 10 km radius</option>
                 <option value={15}>Within 15 km radius</option>
                 <option value={25}>Within 25 km radius</option>
-                <option value={50}>Metropolitan Wide (50 km)</option>
+                <option value={50}>City-Wide (50 km)</option>
               </select>
             </div>
           </div>
@@ -455,10 +476,11 @@ export const SellerBusinessRoom: React.FC<SellerBusinessRoomProps> = ({ onNaviga
         <div className="flex justify-end gap-3">
           <button
             type="submit"
-            className="py-3 px-8 bg-[#F5F5F5] hover:bg-[#E5C392] text-black text-[10px] uppercase tracking-[0.2em] font-semibold transition flex items-center gap-2"
+            disabled={isSaving}
+            className="py-3 px-8 bg-[#F5F5F5] hover:bg-[#E5C392] disabled:opacity-50 text-black text-[10px] uppercase tracking-[0.2em] font-semibold transition flex items-center gap-2 cursor-pointer"
           >
-            <Save className="h-4 w-4" />
-            <span>Publish Storefront Changes</span>
+            {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            <span>{isSaving ? 'Saving Changes...' : 'Publish Storefront Changes'}</span>
           </button>
         </div>
       </form>

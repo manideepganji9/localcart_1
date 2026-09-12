@@ -27,6 +27,13 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   const [unauthorizedDomain, setUnauthorizedDomain] = useState('');
   const [copied, setCopied] = useState(false);
 
+  React.useEffect(() => {
+    if (isOpen) {
+      setError('');
+      setIsUnauthorizedDomain(false);
+    }
+  }, [isOpen]);
+
   const handleGoogleSignIn = async () => {
     setSigningIn(true);
     setError('');

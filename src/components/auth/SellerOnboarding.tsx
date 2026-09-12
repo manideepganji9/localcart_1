@@ -5,6 +5,7 @@ import { extractSellerOnboardingInfo } from '../../services/geminiService';
 import { LocationPicker } from '../common/LocationPicker';
 import { PRODUCT_CATEGORIES, BUSINESS_TYPES, APP_CONFIG } from '../../constants/config';
 import { LocationInfo } from '../../types';
+import { DEFAULT_STORE_PHOTO, DEFAULT_STORE_BANNER } from '../../services/imageStorageService';
 import {
   Sparkles,
   Store,
@@ -70,12 +71,14 @@ export const SellerOnboarding: React.FC<SellerOnboardingProps> = ({ onComplete }
     try {
       const extracted = await extractSellerOnboardingInfo(productsText, businessTypeText);
       if (!businessName) {
-        setBusinessName(extracted.businessNameSuggestion || `${currentUser?.fullName?.split(' ')[0]}'s Studio`);
+        setBusinessName(extracted.businessNameSuggestion || `${currentUser?.fullName?.split(' ')[0]}'s Store`);
       }
       if (extracted.businessCategory) {
         setBusinessCategory(extracted.businessCategory);
+      } else if (productsText) {
+        setBusinessCategory(productsText.slice(0, 50));
       }
-      setTagline(extracted.tagline || 'Handcrafted fresh for neighborhood celebrations');
+      setTagline(extracted.tagline || 'Fresh quality goods for neighborhood celebrations');
       setBusinessDescription(extracted.businessDescription || productsText);
       setAiExtracted(true);
       setStep(2);
@@ -89,13 +92,16 @@ export const SellerOnboarding: React.FC<SellerOnboardingProps> = ({ onComplete }
 
   const handleManualNext = () => {
     if (!businessName) {
-      setBusinessName(`${currentUser?.fullName?.split(' ')[0] || 'My'}'s Studio`);
+      setBusinessName(`${currentUser?.fullName?.split(' ')[0] || 'My'}'s Store`);
     }
     if (!tagline) {
-      setTagline('Handcrafted creations for local customers');
+      setTagline('Quality products for local customers');
     }
     if (!businessDescription) {
-      setBusinessDescription(productsText || 'Local studio serving handcrafted goods.');
+      setBusinessDescription(productsText || 'Local store serving quality goods.');
+    }
+    if (!businessCategory) {
+      setBusinessCategory(productsText ? productsText.slice(0, 50) : 'Homemade Cakes & Desserts');
     }
     setStep(2);
   };
@@ -104,7 +110,7 @@ export const SellerOnboarding: React.FC<SellerOnboardingProps> = ({ onComplete }
     e.preventDefault();
     if (!currentUser) return;
 
-    const slug = (businessName || 'my-studio')
+    const slug = (businessName || 'my-store')
       .toLowerCase()
       .replace(/[^\w\s-]/g, '')
       .replace(/\s+/g, '-');
@@ -114,16 +120,17 @@ export const SellerOnboarding: React.FC<SellerOnboardingProps> = ({ onComplete }
 
     createSellerProfile({
       userId: currentUser.id,
-      businessName: businessName || `${currentUser.fullName}'s Studio`,
+      businessName: businessName || `${currentUser.fullName}'s Store`,
       businessSlug: `${slug}-${Date.now().toString().slice(-4)}`,
-      businessCategory: businessCategory || 'Bakery & Desserts',
+      businessCategory: businessCategory || 'Homemade Cakes & Desserts',
+      whatYouSell: businessCategory || 'Homemade Cakes & Desserts',
       businessDescription: businessDescription || productsText,
-      tagline: tagline || 'Handcrafted with love for local customers',
+      tagline: tagline || 'Quality products for local customers',
       location,
       serviceRadiusKm,
-      bannerUrl: 'https://images.unsplash.com/photo-1517433670267-08bbd4be890f?auto=format&fit=crop&w=1200&q=80',
-      storePhotoUrl: 'https://images.unsplash.com/photo-1578985545062-69928b1d9587?auto=format&fit=crop&w=300&q=80',
-      logoUrl: 'https://images.unsplash.com/photo-1578985545062-69928b1d9587?auto=format&fit=crop&w=300&q=80',
+      bannerUrl: DEFAULT_STORE_BANNER,
+      storePhotoUrl: DEFAULT_STORE_PHOTO,
+      logoUrl: DEFAULT_STORE_PHOTO,
       openingHours: '10:00 AM - 8:30 PM (Daily)',
       deliveryOptions: {
         sellerDelivery: deliveryModes.sellerDelivery,
@@ -133,9 +140,9 @@ export const SellerOnboarding: React.FC<SellerOnboardingProps> = ({ onComplete }
         freeDeliveryAbove: 1500,
         estimatedTime: '2 - 4 hours',
       },
-      contactPhone: contactPhone || currentUser.phone,
+      contactPhone: contactPhone || currentUser.phone || '',
       contactEmail: currentUser.email,
-      tags: ['Local Studio', 'Handcrafted', 'Verified'],
+      tags: ['Local Store', 'Verified', (businessCategory || '').toLowerCase()],
     });
 
     onComplete();
@@ -258,19 +265,16 @@ export const SellerOnboarding: React.FC<SellerOnboardingProps> = ({ onComplete }
 
               <div>
                 <label className="block text-xs font-semibold text-stone-700 mb-1">
-                  Primary Category *
+                  What do you sell? *
                 </label>
-                <select
+                <input
+                  type="text"
                   value={businessCategory}
                   onChange={e => setBusinessCategory(e.target.value)}
+                  placeholder="e.g. Homemade Cakes, Cupcakes & Desserts"
                   className="w-full px-3.5 py-2.5 bg-white border border-stone-300 rounded-xl text-xs sm:text-sm text-stone-900 focus:outline-none focus:border-emerald-600"
-                >
-                  {PRODUCT_CATEGORIES.map(c => (
-                    <option key={c.id} value={c.name}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
+                  required
+                />
               </div>
             </div>
 
@@ -387,7 +391,7 @@ export const SellerOnboarding: React.FC<SellerOnboardingProps> = ({ onComplete }
                     onChange={e => setDeliveryModes({ ...deliveryModes, buyerPickup: e.target.checked })}
                     className="accent-emerald-600 rounded"
                   />
-                  <span>Customer Studio Pickup</span>
+                  <span>Customer Store Pickup</span>
                 </label>
               </div>
             </div>

@@ -15,6 +15,8 @@ service cloud.firestore {
     function isSeller() {
       return isAuthenticated() &&
         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        ('role' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data) &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role is string) &&
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role.lower() == 'seller';
     }
 
@@ -31,6 +33,8 @@ service cloud.firestore {
         exists(/databases/$(database)/documents/orders/$(orderId)) &&
         (
           get(/databases/$(database)/documents/orders/$(orderId)).data.buyerId == request.auth.uid ||
+          ('sellerUserId' in get(/databases/$(database)/documents/orders/$(orderId)).data &&
+            get(/databases/$(database)/documents/orders/$(orderId)).data.sellerUserId == request.auth.uid) ||
           isStoreOwner(get(/databases/$(database)/documents/orders/$(orderId)).data.sellerId)
         );
     }
@@ -47,14 +51,23 @@ service cloud.firestore {
 
       // New profile creation: owner only, role must be 'unassigned', 'buyer', or 'seller' (no admin)
       allow create: if isOwner(userId) &&
-        request.resource.data.role.lower() in ['unassigned', 'buyer', 'seller'];
+        (!('role' in request.resource.data) ||
+         request.resource.data.role == null ||
+         (request.resource.data.role is string &&
+          request.resource.data.role.lower() in ['unassigned', 'buyer', 'seller']));
 
       // Profile updates: owner only; uid and createdAt immutable; role cannot switch once assigned; no admin
       allow update: if isOwner(userId) &&
         (!('uid' in resource.data) || request.resource.data.uid == resource.data.uid) &&
         (!('createdAt' in resource.data) || request.resource.data.createdAt == resource.data.createdAt) &&
-        request.resource.data.role.lower() in ['unassigned', 'buyer', 'seller'] &&
-        (resource.data.role.lower() == 'unassigned' || request.resource.data.role.lower() == resource.data.role.lower()) &&
+        (!('role' in request.resource.data) ||
+         (request.resource.data.role is string &&
+          request.resource.data.role.lower() in ['unassigned', 'buyer', 'seller'])) &&
+        (!('role' in resource.data) ||
+         resource.data.role == null ||
+         resource.data.role.lower() == 'unassigned' ||
+         !('role' in request.resource.data) ||
+         request.resource.data.role.lower() == resource.data.role.lower()) &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'displayName',
           'fullName',
@@ -120,17 +133,32 @@ service cloud.firestore {
       // Update: must be SELLER; owner only; userId, rating, reviewCount, isVerified, createdAt protected
       allow update: if isSeller() &&
         resource.data.userId == request.auth.uid &&
-        request.resource.data.userId == resource.data.userId &&
-        request.resource.data.rating == resource.data.rating &&
-        request.resource.data.reviewCount == resource.data.reviewCount &&
-        request.resource.data.isVerified == resource.data.isVerified &&
-        request.resource.data.createdAt == resource.data.createdAt &&
+        (!('userId' in request.resource.data) || request.resource.data.userId == resource.data.userId) &&
+        (!('rating' in resource.data) || !('rating' in request.resource.data) || request.resource.data.rating == resource.data.rating) &&
+        (!('reviewCount' in resource.data) || !('reviewCount' in request.resource.data) || request.resource.data.reviewCount == resource.data.reviewCount) &&
+        (!('isVerified' in resource.data) || !('isVerified' in request.resource.data) || request.resource.data.isVerified == resource.data.isVerified) &&
+        (!('createdAt' in resource.data) || !('createdAt' in request.resource.data) || request.resource.data.createdAt == resource.data.createdAt) &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'id',
+          'userId',
           'businessName',
+          'businessSlug',
+          'businessCategory',
+          'whatYouSell',
+          'businessDescription',
           'description',
           'category',
+          'tagline',
           'location',
+          'serviceRadiusKm',
+          'bannerUrl',
+          'logoUrl',
+          'storePhotoUrl',
+          'openingHours',
           'deliveryOptions',
+          'contactPhone',
+          'contactEmail',
+          'tags',
           'updatedAt'
         ]);
 
@@ -182,6 +210,7 @@ service cloud.firestore {
       // Read: buyer or owning seller
       allow read: if isAuthenticated() && (
         resource.data.buyerId == request.auth.uid ||
+        ('sellerUserId' in resource.data && resource.data.sellerUserId == request.auth.uid) ||
         isStoreOwner(resource.data.sellerId)
       );
 
@@ -273,6 +302,34 @@ service cloud.firestore {
         // Messages are immutable once sent
         allow update, delete: if false;
       }
+    }
+
+    // Notifications collection: notifications/{notificationId}
+    match /notifications/{notificationId} {
+      // User can read notifications addressed to them
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        (resource.data.recipientId == request.auth.uid)
+      );
+
+      // System or authenticated users can create notifications
+      allow create: if isAuthenticated() && (
+        request.resource.data.userId == request.auth.uid ||
+        request.resource.data.recipientId == request.auth.uid ||
+        request.resource.data.recipientId is string
+      );
+
+      // User can mark their notifications as read
+      allow update: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        resource.data.recipientId == request.auth.uid
+      ) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read', 'updatedAt']);
+
+      // User can delete their notifications
+      allow delete: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        resource.data.recipientId == request.auth.uid
+      );
     }
   }
 }

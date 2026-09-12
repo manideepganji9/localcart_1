@@ -28,6 +28,13 @@ export const RegisterModal: React.FC<RegisterModalProps> = ({
   const [unauthorizedDomain, setUnauthorizedDomain] = useState('');
   const [copied, setCopied] = useState(false);
 
+  React.useEffect(() => {
+    if (isOpen) {
+      setError('');
+      setIsUnauthorizedDomain(false);
+    }
+  }, [isOpen]);
+
   const handleGoogleJoin = async () => {
     setLoading(true);
     setError('');

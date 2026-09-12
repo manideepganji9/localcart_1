@@ -41,7 +41,8 @@ export interface SellerProfile {
   userId: string;
   businessName: string;
   businessSlug: string;
-  businessCategory: string; // e.g. "Bakery & Desserts", "Handmade Jewellery"
+  businessCategory: string; // e.g. "Bakery & Desserts", "Handmade Jewellery", or custom "What do you sell?"
+  whatYouSell?: string;
   businessDescription: string;
   tagline: string;
   rating: number;

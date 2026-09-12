@@ -31,6 +31,7 @@ import {
 } from '../services/firebase';
 import { sendChatMessage } from '../services/chatService';
 import { cleanupStoreStorage, deleteStorageImage } from '../services/imageStorageService';
+import { logFirestoreDiag } from '../services/firestoreDiagnostic';
 
 interface StoreContextType {
   sellerProfiles: SellerProfile[];
@@ -217,69 +218,117 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     let unsubscribe: () => void = () => {};
     try {
       const colRef = collection(db, 'sellerProfiles');
-      unsubscribe = onSnapshot(colRef, (snapshot) => {
-        const items: SellerProfile[] = [];
-        snapshot.forEach((docSnap) => {
-          items.push({ id: docSnap.id, ...(docSnap.data() as any) });
-        });
-        setFirestoreSellers(items);
-      }, (err) => {
-        console.warn('Firestore sellers snapshot error:', err);
-      });
+      unsubscribe = onSnapshot(
+        colRef,
+        (snapshot) => {
+          const items: SellerProfile[] = [];
+          snapshot.forEach((docSnap) => {
+            items.push({ id: docSnap.id, ...(docSnap.data() as any) });
+          });
+          setFirestoreSellers(items);
+        },
+        (err) => {
+          logFirestoreDiag({
+            path: 'sellerProfiles',
+            operationType: 'listener',
+            currentRole: currentUser?.role || null,
+            error: err,
+          });
+          console.warn('Firestore sellers snapshot error:', err);
+        }
+      );
     } catch (err) {
+      logFirestoreDiag({
+        path: 'sellerProfiles',
+        operationType: 'listener',
+        currentRole: currentUser?.role || null,
+        error: err,
+      });
       console.warn('Failed to listen to sellerProfiles:', err);
     }
     return () => unsubscribe();
   }, []);
 
-  // 2. Subscribe to current Buyer Profile in real-time (authenticated users only)
+  // 2. Subscribe to current Buyer Profile in real-time (authenticated buyers only)
   useEffect(() => {
-    if (!currentUser?.id) {
+    if (!currentUser?.id || currentUser.role === 'UNASSIGNED' || currentUser.role !== 'BUYER') {
       setFirestoreBuyers([]);
       return;
     }
     let unsubscribe: () => void = () => {};
     try {
       const buyerDocRef = doc(db, 'buyerProfiles', currentUser.id);
-      unsubscribe = onSnapshot(buyerDocRef, (docSnap) => {
-        if (docSnap.exists()) {
-          const profile: BuyerProfile = { id: docSnap.id, ...(docSnap.data() as any) };
-          setFirestoreBuyers([profile]);
-        } else {
-          setFirestoreBuyers([]);
+      unsubscribe = onSnapshot(
+        buyerDocRef,
+        (docSnap) => {
+          if (docSnap.exists()) {
+            const profile: BuyerProfile = { id: docSnap.id, ...(docSnap.data() as any) };
+            setFirestoreBuyers([profile]);
+          } else {
+            setFirestoreBuyers([]);
+          }
+        },
+        (err) => {
+          logFirestoreDiag({
+            path: `buyerProfiles/${currentUser.id}`,
+            operationType: 'listener',
+            currentRole: currentUser?.role || null,
+            error: err,
+          });
+          console.warn('Firestore buyer profile snapshot notice:', err?.message || err);
         }
-      }, (err) => {
-        console.warn('Firestore buyer profile snapshot notice:', err?.message || err);
-      });
+      );
     } catch (err) {
+      logFirestoreDiag({
+        path: `buyerProfiles/${currentUser.id}`,
+        operationType: 'listener',
+        currentRole: currentUser?.role || null,
+        error: err,
+      });
       console.warn('Failed to listen to buyerProfile:', err);
     }
     return () => unsubscribe();
-  }, [currentUser?.id]);
+  }, [currentUser?.id, currentUser?.role]);
 
   // 3. Subscribe to Firestore Products in real-time
   useEffect(() => {
     let unsubscribe: () => void = () => {};
     try {
       const colRef = collection(db, 'products');
-      unsubscribe = onSnapshot(colRef, (snapshot) => {
-        const items: Product[] = [];
-        snapshot.forEach((docSnap) => {
-          items.push({ id: docSnap.id, ...(docSnap.data() as any) });
-        });
-        setFirestoreProducts(items);
-      }, (err) => {
-        console.warn('Firestore products snapshot error:', err);
-      });
+      unsubscribe = onSnapshot(
+        colRef,
+        (snapshot) => {
+          const items: Product[] = [];
+          snapshot.forEach((docSnap) => {
+            items.push({ id: docSnap.id, ...(docSnap.data() as any) });
+          });
+          setFirestoreProducts(items);
+        },
+        (err) => {
+          logFirestoreDiag({
+            path: 'products',
+            operationType: 'listener',
+            currentRole: currentUser?.role || null,
+            error: err,
+          });
+          console.warn('Firestore products snapshot error:', err);
+        }
+      );
     } catch (err) {
+      logFirestoreDiag({
+        path: 'products',
+        operationType: 'listener',
+        currentRole: currentUser?.role || null,
+        error: err,
+      });
       console.warn('Failed to listen to products:', err);
     }
     return () => unsubscribe();
   }, []);
 
-  // 4. Subscribe to Firestore Orders in real-time with role-based queries (authenticated users only)
+  // 4. Subscribe to Firestore Orders in real-time with role-based queries (authenticated completed-onboarding users only)
   useEffect(() => {
-    if (!currentUser?.id) {
+    if (!currentUser?.id || currentUser.role === 'UNASSIGNED' || !currentUser.onboardingCompleted) {
       setFirestoreOrders([]);
       return;
     }
@@ -306,28 +355,44 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         );
       }
 
-      unsubscribe = onSnapshot(ordersQuery, (snapshot) => {
-        const items: Order[] = [];
-        snapshot.forEach((docSnap) => {
-          const data = docSnap.data() as any;
-          items.push({ id: docSnap.id, ...data });
-        });
-        // Sort newest first
-        items.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
-        setFirestoreOrders(items);
-      }, (err) => {
-        console.warn('Firestore role-based orders snapshot notice:', err?.message || err);
-      });
+      unsubscribe = onSnapshot(
+        ordersQuery,
+        (snapshot) => {
+          const items: Order[] = [];
+          snapshot.forEach((docSnap) => {
+            const data = docSnap.data() as any;
+            items.push({ id: docSnap.id, ...data });
+          });
+          // Sort newest first
+          items.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+          setFirestoreOrders(items);
+        },
+        (err) => {
+          logFirestoreDiag({
+            path: isSeller ? `orders (sellerId: ${currentUser.id})` : `orders (buyerId: ${currentUser.id})`,
+            operationType: 'listener',
+            currentRole: currentUser?.role || null,
+            error: err,
+          });
+          console.warn('Firestore role-based orders snapshot notice:', err?.message || err);
+        }
+      );
     } catch (err) {
+      logFirestoreDiag({
+        path: `orders (user: ${currentUser.id})`,
+        operationType: 'listener',
+        currentRole: currentUser?.role || null,
+        error: err,
+      });
       console.warn('Failed to listen to orders:', err);
     }
 
     return () => unsubscribe();
-  }, [currentUser?.id, currentUser?.role, firestoreSellers]);
+  }, [currentUser?.id, currentUser?.role, currentUser?.onboardingCompleted, firestoreSellers]);
 
   // 5. Subscribe to Notifications in real-time (authenticated users only)
   useEffect(() => {
-    if (!currentUser?.id) {
+    if (!currentUser?.id || currentUser.role === 'UNASSIGNED') {
       setFirestoreNotifications([]);
       return;
     }
@@ -337,32 +402,48 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         collection(db, 'notifications'),
         where('userId', '==', currentUser.id)
       );
-      unsubscribe = onSnapshot(notifQuery, (snapshot) => {
-        const notifs: AppNotification[] = [];
-        snapshot.forEach((docSnap) => {
-          const data = docSnap.data() as any;
-          notifs.push({
-            id: docSnap.id,
-            userId: data.userId || currentUser.id,
-            recipientId: data.recipientId || data.userId || currentUser.id,
-            orderId: data.orderId,
-            type: data.type,
-            title: data.title || 'Notification',
-            message: data.message || '',
-            read: data.read ?? false,
-            createdAt: data.createdAt || new Date().toISOString(),
+      unsubscribe = onSnapshot(
+        notifQuery,
+        (snapshot) => {
+          const notifs: AppNotification[] = [];
+          snapshot.forEach((docSnap) => {
+            const data = docSnap.data() as any;
+            notifs.push({
+              id: docSnap.id,
+              userId: data.userId || currentUser.id,
+              recipientId: data.recipientId || data.userId || currentUser.id,
+              orderId: data.orderId,
+              type: data.type,
+              title: data.title || 'Notification',
+              message: data.message || '',
+              read: data.read ?? false,
+              createdAt: data.createdAt || new Date().toISOString(),
+            });
           });
-        });
-        notifs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        setFirestoreNotifications(notifs);
-      }, (err) => {
-        console.warn('Notifications snapshot notice:', err?.message || err);
-      });
+          notifs.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+          setFirestoreNotifications(notifs);
+        },
+        (err) => {
+          logFirestoreDiag({
+            path: `notifications?userId==${currentUser.id}`,
+            operationType: 'listener',
+            currentRole: currentUser?.role || null,
+            error: err,
+          });
+          console.warn('Notifications snapshot notice:', err?.message || err);
+        }
+      );
     } catch (err) {
+      logFirestoreDiag({
+        path: `notifications?userId==${currentUser.id}`,
+        operationType: 'listener',
+        currentRole: currentUser?.role || null,
+        error: err,
+      });
       console.warn('Failed to listen to notifications:', err);
     }
     return () => unsubscribe();
-  }, [currentUser?.id]);
+  }, [currentUser?.id, currentUser?.role]);
 
   // Sync cart to localStorage
   useEffect(() => {
@@ -471,16 +552,33 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   );
 
   const updateSellerProfile = async (updates: Partial<SellerProfile> & { id: string }) => {
+    const { id, ...cleanUpdates } = updates;
+    const targetDocId = id;
+
     // Optimistically update local state immediately so UI updates in 0ms without requiring page refresh
     setFirestoreSellers(prev =>
-      prev.map(s => (s.id === updates.id || s.userId === updates.id ? { ...s, ...updates } : s))
+      prev.map(s => (s.id === targetDocId || s.userId === targetDocId ? { ...s, ...cleanUpdates } : s))
     );
 
+    const docRef = doc(db, 'sellerProfiles', targetDocId);
+    const payload = { ...cleanUpdates, updatedAt: new Date().toISOString() };
+
     try {
-      const docRef = doc(db, 'sellerProfiles', updates.id);
-      await updateDoc(docRef, { ...updates, updatedAt: new Date().toISOString() });
-    } catch (err) {
-      console.warn('Firestore updateSellerProfile notice:', err);
+      await updateDoc(docRef, payload);
+    } catch (err: any) {
+      console.warn('Firestore updateDoc failed, attempting setDoc with merge:', err?.message || err);
+      try {
+        await setDoc(docRef, payload, { merge: true });
+      } catch (mergeErr: any) {
+        logFirestoreDiag({
+          path: `sellerProfiles/${targetDocId}`,
+          operationType: 'update',
+          currentRole: currentUser?.role || null,
+          error: mergeErr,
+        });
+        console.error('Firestore updateSellerProfile fatal error:', mergeErr);
+        throw mergeErr;
+      }
     }
   };
 

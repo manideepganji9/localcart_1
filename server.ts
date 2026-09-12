@@ -240,6 +240,7 @@ app.post('/api/orders/checkout', async (req, res) => {
         buyerPhone: buyerPhone || '',
         buyerLocation: buyerLocation || null,
         sellerId: sellerSnap.id,
+        sellerUserId: sellerData.userId || sellerSnap.id,
         sellerBusinessName: sellerData.businessName || 'Local Store',
         sellerLocation: sellerData.location || null,
         items: itemSnapshots,

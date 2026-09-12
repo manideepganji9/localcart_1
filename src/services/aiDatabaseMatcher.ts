@@ -72,7 +72,7 @@ export function analyzeBuyerQuery(
     'above', 'over', 'more', 'near', 'nearby', 'right', 'now', 'currently',
     'cheapest', 'best', 'highest', 'rated', 'popular', 'any', 'some', 'please',
     'tell', 'give', 'details', 'info', 'about', 'from', 'at', 'store', 'shop',
-    'bakery', 'studio', 'atelier', 'room', 'room', 'status', 'my', 'order', 'orders',
+    'bakery', 'status', 'my', 'order', 'orders',
     'item', 'items', 'product', 'products', 'rupees', 'rs', 'inr'
   ]);
 
@@ -82,8 +82,8 @@ export function analyzeBuyerQuery(
   const isPriceQuery = /price|cost|rate|how much|mrp/i.test(userQuery);
   const isStockQuery = /how many|quantity|stock|units|count/i.test(userQuery);
   const isAvailabilityQuery = /available|in stock|in-stock|out of stock|unavailable|have/i.test(userQuery) && !isStockQuery;
-  const isSellerQuery = /who sells|which bakery|which shop|which seller|which store|where to buy/i.test(userQuery);
-  const isOrderQuery = /my order|order status|where is my order|has my order|dispatched|tracking|track order/i.test(userQuery);
+  const isSellerQuery = /who sells|which bakery|which shop|which seller|which store|where to buy|find a .* shop|find a .* store|find .* shop|find .* store/i.test(userQuery);
+  const isOrderQuery = /my order|order status|where is my order|has my order|dispatched|tracking|track order|what did i order|recent order|past order|orders/i.test(userQuery);
   const isUnavailableQuery = /unavailable|out of stock|sold out|out-of-stock|depleted/i.test(userQuery);
   const isCheapest = /cheapest|lowest price|least expensive|budget friendly/i.test(userQuery);
   const isHighestRated = /highest rated|top rated|best rated|highest rating|best review/i.test(userQuery);
@@ -303,27 +303,40 @@ export function analyzeBuyerQuery(
         ? `Yes. ${sellerName} currently has ${p.name} available at ₹${p.finalPrice}, with ${p.stockQuantity} units in stock.`
         : `Currently, ${p.name} at ${sellerName} is out of stock.`;
     } else if (isSellerQuery) {
-      summaryFact = `${p.name} is handcrafted and sold by ${sellerName}${sellerArea ? ` located in ${sellerArea}` : ''} at ₹${p.finalPrice}.`;
+      summaryFact = `${p.name} is available and sold by ${sellerName}${sellerArea ? ` located in ${sellerArea}` : ''} at ₹${p.finalPrice}.`;
     } else {
       summaryFact = `${p.name} is offered by ${sellerName} for ₹${p.finalPrice}. Availability: ${stockStr}.`;
     }
-  } else if (isOrderQuery && matchedOrders.length > 0) {
-    const latest = matchedOrders[0];
-    const statusLabels: { [key: string]: string } = {
-      CONFIRMED: 'Confirmed & Accepted by Seller',
-      PENDING_SELLER_APPROVAL: 'Pending Seller Approval',
-      ACCEPTED: 'Accepted & Slated for Production',
-      PREPARING: 'Under Active Preparation in Store',
-      READY: 'Ready for Dispatch / Pickup',
-      OUT_FOR_DELIVERY: 'Dispatched & Out for Delivery',
-      DELIVERED: 'Delivered to Destination',
-      REJECTED: 'Declined by Seller',
-      CANCELLED: 'Cancelled'
-    };
-    summaryFact = `Your order #${latest.orderNumber} from ${latest.sellerBusinessName} for ₹${latest.total} is currently ${statusLabels[latest.status] || latest.status}. Expected delivery: ${latest.expectedDeliveryDate || 'Standard dispatch timeline'}.`;
+  } else if (isOrderQuery) {
+    if (matchedOrders.length === 0) {
+      summaryFact = `You do not have any recent orders recorded in your account.`;
+    } else {
+      const statusLabels: { [key: string]: string } = {
+        CONFIRMED: 'Confirmed & Accepted by Seller',
+        PENDING_SELLER_APPROVAL: 'Pending Seller Approval',
+        ACCEPTED: 'Accepted & Slated for Production',
+        PREPARING: 'Under Active Preparation in Store',
+        READY: 'Ready for Dispatch / Pickup',
+        OUT_FOR_DELIVERY: 'Dispatched & Out for Delivery',
+        DELIVERED: 'Delivered to Destination',
+        REJECTED: 'Declined by Seller',
+        CANCELLED: 'Cancelled'
+      };
+
+      if (matchedOrders.length === 1) {
+        const latest = matchedOrders[0];
+        summaryFact = `Your recent order #${latest.orderNumber} from ${latest.sellerBusinessName} for ₹${latest.total} is currently ${statusLabels[latest.status] || latest.status}. Expected delivery: ${latest.expectedDeliveryDate || 'Standard dispatch timeline'}.`;
+      } else {
+        const orderSummaries = matchedOrders.slice(0, 3).map(o => `#${o.orderNumber} from ${o.sellerBusinessName} (₹${o.total}, ${statusLabels[o.status] || o.status})`).join('; ');
+        summaryFact = `You have ${matchedOrders.length} recent order(s): ${orderSummaries}.`;
+      }
+    }
   } else if (filteredProducts.length > 0) {
     const top = filteredProducts.slice(0, 4);
-    summaryFact = `Found ${filteredProducts.length} matching creation${filteredProducts.length > 1 ? 's' : ''} in the local catalog: ${top.map(p => `"${p.name}" (₹${p.finalPrice} at ${p.businessName})`).join(', ')}.`;
+    summaryFact = `Found ${filteredProducts.length} matching product${filteredProducts.length > 1 ? 's' : ''} in the local catalog: ${top.map(p => `"${p.name}" (₹${p.finalPrice} at ${p.businessName})`).join(', ')}.`;
+  } else if (matchedSellers.length > 0) {
+    const top = matchedSellers.slice(0, 3);
+    summaryFact = `Found ${matchedSellers.length} local store(s): ${top.map(s => `"${s.businessName}" in ${s.location.area || s.location.city} (${s.whatYouSell || s.businessCategory})`).join(', ')}.`;
   } else {
     summaryFact = `I couldn't find that in the current LocalCart catalog.`;
   }

@@ -73,34 +73,7 @@ export const ImageUploadBox: React.FC<ImageUploadBoxProps> = ({
       ? 'aspect-[21/9]'
       : 'aspect-square';
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setErrorMsg(null);
-    setSuccessMsg(null);
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-
-    const file = files[0];
-    const validation = validateImageFile(file);
-    if (!validation.valid) {
-      setErrorMsg(validation.error || 'Invalid file format.');
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      return;
-    }
-
-    // Revoke previous blob if any
-    if (previewUrl && previewUrl.startsWith('blob:')) {
-      URL.revokeObjectURL(previewUrl);
-    }
-
-    setSelectedFile(file);
-    setUploadProgress(0);
-    const localUrl = URL.createObjectURL(file);
-    setPreviewUrl(localUrl);
-  };
-
-  const handleConfirmUpload = async () => {
-    if (!selectedFile || isUploading) return;
-
+  const startUpload = async (fileToUpload: File) => {
     setIsUploading(true);
     setUploadProgress(0);
     setErrorMsg(null);
@@ -108,7 +81,7 @@ export const ImageUploadBox: React.FC<ImageUploadBoxProps> = ({
 
     try {
       await onUpload(
-        selectedFile,
+        fileToUpload,
         (percent: number) => {
           setUploadProgress(percent);
         },
@@ -140,6 +113,39 @@ export const ImageUploadBox: React.FC<ImageUploadBoxProps> = ({
       setIsUploading(false);
       cancelRef.current = undefined;
     }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    const file = files[0];
+    const validation = validateImageFile(file);
+    if (!validation.valid) {
+      setErrorMsg(validation.error || 'Invalid file format.');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    // Revoke previous blob if any
+    if (previewUrl && previewUrl.startsWith('blob:')) {
+      URL.revokeObjectURL(previewUrl);
+    }
+
+    setSelectedFile(file);
+    setUploadProgress(0);
+    const localUrl = URL.createObjectURL(file);
+    setPreviewUrl(localUrl);
+
+    // Automatically trigger upload and database synchronization immediately
+    startUpload(file);
+  };
+
+  const handleConfirmUpload = async () => {
+    if (!selectedFile || isUploading) return;
+    await startUpload(selectedFile);
   };
 
   const handleCancelUpload = () => {

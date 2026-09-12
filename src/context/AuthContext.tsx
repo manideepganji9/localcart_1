@@ -21,6 +21,7 @@ import {
 } from '../services/firebase';
 import { setCachedUserProfile } from '../services/userProfileCache';
 import { DEFAULT_AVATAR } from '../services/imageStorageService';
+import { logFirestoreDiag } from '../services/firestoreDiagnostic';
 
 function extractCanonicalLocation(data: any): LocationInfo {
   const rawLoc = data?.location || {};
@@ -171,6 +172,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const userDocRef = doc(db, 'users', fbUser.uid);
 
       try {
+        logFirestoreDiag({
+          path: `users/${fbUser.uid}`,
+          operationType: 'get',
+          currentRole: 'none',
+        });
         const userSnap = await getDoc(userDocRef);
         if (!userSnap.exists()) {
           // Brand-new Google user: Create minimal profile in Firestore
@@ -196,6 +202,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               address: '',
             },
           };
+          logFirestoreDiag({
+            path: `users/${fbUser.uid}`,
+            operationType: 'set',
+            currentRole: 'unassigned',
+          });
           await setDoc(userDocRef, initialData);
 
           const newUser: User = {
@@ -242,6 +253,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setIsProfileLoading(false);
         }
       } catch (err: any) {
+        logFirestoreDiag({
+          path: `users/${fbUser.uid}`,
+          operationType: 'get',
+          currentRole: 'unknown',
+          error: err,
+        });
         console.error('[Firestore] User profile initialization notice:', {
           code: err?.code,
           message: err?.message,
@@ -280,6 +297,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           }
         },
         (snapErr) => {
+          logFirestoreDiag({
+            path: `users/${fbUser.uid}`,
+            operationType: 'listener',
+            currentRole: currentUser?.role || null,
+            error: snapErr,
+          });
           console.error('[Firestore] Profile snapshot error:', {
             code: snapErr?.code,
             message: snapErr?.message,
@@ -352,8 +375,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const userDocRef = doc(db, 'users', fbUser.uid);
       let userSnap: any = null;
       try {
+        logFirestoreDiag({
+          path: `users/${fbUser.uid}`,
+          operationType: 'get',
+          currentRole: 'none',
+        });
         userSnap = await getDoc(userDocRef);
       } catch (docErr: any) {
+        logFirestoreDiag({
+          path: `users/${fbUser.uid}`,
+          operationType: 'get',
+          currentRole: 'none',
+          error: docErr,
+        });
         console.error('[Firestore] Error reading user doc:', {
           code: docErr?.code,
           message: docErr?.message,
@@ -387,8 +421,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         };
 
         try {
+          logFirestoreDiag({
+            path: `users/${fbUser.uid}`,
+            operationType: 'set',
+            currentRole: 'unassigned',
+          });
           await setDoc(userDocRef, initialData);
         } catch (setErr: any) {
+          logFirestoreDiag({
+            path: `users/${fbUser.uid}`,
+            operationType: 'set',
+            currentRole: 'unassigned',
+            error: setErr,
+          });
           console.error('[Firestore] Error creating initial user profile:', {
             code: setErr?.code,
             message: setErr?.message,
@@ -701,10 +746,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // In firestore.rules, users/{uid} update whitelist is:
     // ['displayName', 'fullName', 'email', 'phone', 'photoURL', 'avatarUrl', 'profilePhotoUrl', 'location', 'onboardingCompleted', 'role', 'updatedAt']
     const userDocRef = doc(db, 'users', targetUid);
-    const userSnap = await getDoc(userDocRef);
+    logFirestoreDiag({
+      path: `users/${targetUid}`,
+      operationType: 'get',
+      currentRole: currentUser?.role || null,
+    });
+    let userSnap: any;
+    try {
+      userSnap = await getDoc(userDocRef);
+    } catch (gErr: any) {
+      logFirestoreDiag({
+        path: `users/${targetUid}`,
+        operationType: 'get',
+        currentRole: currentUser?.role || null,
+        error: gErr,
+      });
+      throw gErr;
+    }
 
     try {
       if (!userSnap.exists()) {
+        logFirestoreDiag({
+          path: `users/${targetUid}`,
+          operationType: 'set',
+          currentRole: roleLower,
+        });
         await setDoc(userDocRef, {
           uid: targetUid,
           displayName: cleanName,
@@ -721,6 +787,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           updatedAt: nowIso,
         });
       } else {
+        logFirestoreDiag({
+          path: `users/${targetUid}`,
+          operationType: 'update',
+          currentRole: roleLower,
+        });
         await updateDoc(userDocRef, {
           displayName: cleanName,
           fullName: cleanName,
@@ -736,12 +807,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         });
       }
     } catch (err: any) {
+      logFirestoreDiag({
+        path: `users/${targetUid}`,
+        operationType: userSnap?.exists() ? 'update' : 'set',
+        currentRole: roleLower,
+        error: err,
+      });
       console.error('[Firestore] Error writing users document in completeOnboarding:', {
         code: err?.code,
         message: err?.message,
         collection: 'users',
         doc: targetUid,
-        operation: userSnap.exists() ? 'updateDoc' : 'setDoc',
+        operation: userSnap?.exists() ? 'updateDoc' : 'setDoc',
       });
       throw err;
     }
@@ -750,8 +827,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (cleanRole === 'BUYER') {
       try {
         const buyerDocRef = doc(db, 'buyerProfiles', targetUid);
+        logFirestoreDiag({
+          path: `buyerProfiles/${targetUid}`,
+          operationType: 'get',
+          currentRole: 'buyer',
+        });
         const buyerSnap = await getDoc(buyerDocRef);
         if (!buyerSnap.exists()) {
+          logFirestoreDiag({
+            path: `buyerProfiles/${targetUid}`,
+            operationType: 'set',
+            currentRole: 'buyer',
+          });
           await setDoc(buyerDocRef, {
             id: targetUid,
             userId: targetUid,
@@ -764,6 +851,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             updatedAt: nowIso,
           });
         } else {
+          logFirestoreDiag({
+            path: `buyerProfiles/${targetUid}`,
+            operationType: 'update',
+            currentRole: 'buyer',
+          });
           await updateDoc(buyerDocRef, {
             fullName: cleanName,
             email: currentUser?.email || firebaseUser?.email || '',
@@ -773,6 +865,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           });
         }
       } catch (bErr: any) {
+        logFirestoreDiag({
+          path: `buyerProfiles/${targetUid}`,
+          operationType: 'set',
+          currentRole: 'buyer',
+          error: bErr,
+        });
         console.error('[Firestore] Error saving buyerProfiles document:', {
           code: bErr?.code,
           message: bErr?.message,
@@ -783,12 +881,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     } else if (cleanRole === 'SELLER') {
       try {
+        logFirestoreDiag({
+          path: 'sellerProfiles?userId==' + targetUid,
+          operationType: 'query',
+          currentRole: 'seller',
+        });
         const sellersQuery = query(collection(db, 'sellerProfiles'), where('userId', '==', targetUid));
         const sellersSnap = await getDocs(sellersQuery);
         if (sellersSnap.empty) {
           const sellerId = `seller-${targetUid.slice(0, 8)}-${Date.now().toString().slice(-4)}`;
           const cleanSlug = cleanName.toLowerCase().replace(/[^\w\s-]/g, '').replace(/\s+/g, '-') || 'store';
           const sellerDocRef = doc(db, 'sellerProfiles', sellerId);
+          logFirestoreDiag({
+            path: `sellerProfiles/${sellerId}`,
+            operationType: 'set',
+            currentRole: 'seller',
+          });
           await setDoc(sellerDocRef, {
             id: sellerId,
             userId: targetUid,
@@ -821,6 +929,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           });
         }
       } catch (sErr: any) {
+        logFirestoreDiag({
+          path: `sellerProfiles (userId: ${targetUid})`,
+          operationType: 'set',
+          currentRole: 'seller',
+          error: sErr,
+        });
         console.error('[Firestore] Error saving sellerProfiles document:', {
           code: sErr?.code,
           message: sErr?.message,
