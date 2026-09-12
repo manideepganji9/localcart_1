@@ -1,0 +1,20 @@
+[
+  {
+    "origin": [
+      "https://localcart-1.vercel.app",
+      "https://my-localcart.firebaseapp.com",
+      "https://my-localcart.web.app",
+      "http://localhost:5173",
+      "http://localhost:3000"
+    ],
+    "method": ["GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS"],
+    "maxAgeSeconds": 3600,
+    "responseHeader": [
+      "Content-Type",
+      "Authorization",
+      "Content-Length",
+      "User-Agent",
+      "x-goog-resumable"
+    ]
+  }
+]

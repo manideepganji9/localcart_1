@@ -1,12 +1,11 @@
 import {
   storage,
   storageRef,
+  uploadBytes,
   getDownloadURL,
   deleteObject,
-  uploadBytesResumable,
   auth
 } from './firebase';
-import type { UploadTask } from 'firebase/storage';
 
 export interface ImageOptimizationOptions {
   maxWidth?: number;
@@ -189,8 +188,63 @@ export function blobToDataUrl(blob: Blob): Promise<string> {
 }
 
 /**
- * Upload an image file to Firebase Storage using resumable uploads,
- * real-time progress updates, cancellation support, and controlled timeout.
+ * Formats Firebase Storage errors into human-readable, actionable guidance.
+ */
+export function formatStorageError(error: any): string {
+  const code = error?.code || '';
+  const status = error?.status_ || error?.status;
+  const message = error?.message || '';
+
+  if (
+    code === 'storage/bucket-not-found' ||
+    status === 404 ||
+    message.includes('404') ||
+    message.includes('bucket does not exist') ||
+    message.includes('NoSuchBucket')
+  ) {
+    return 'Cloud Storage bucket not initialized or not found. Please activate Cloud Storage in the Firebase Console (Build > Storage > Get Started).';
+  }
+
+  if (
+    code === 'storage/unauthorized' ||
+    status === 403 ||
+    message.includes('403') ||
+    message.includes('permission') ||
+    message.includes('unauthorized')
+  ) {
+    return 'Permission denied: You do not have permission to upload this photo, or your login session expired. Please sign in again.';
+  }
+
+  if (code === 'storage/unauthenticated') {
+    return 'Authentication required. Please sign in with your Google account to upload photos.';
+  }
+
+  if (code === 'storage/quota-exceeded') {
+    return 'Firebase Storage quota exceeded. Please check your project usage limits.';
+  }
+
+  if (code === 'storage/retry-limit-exceeded') {
+    return 'Upload connection timed out or blocked by CORS policy. Please verify your internet connection.';
+  }
+
+  if (code === 'storage/invalid-checksum') {
+    return 'File upload integrity check failed. Please try uploading again.';
+  }
+
+  if (code === 'storage/canceled') {
+    return 'Image upload was cancelled.';
+  }
+
+  if (message.includes('Failed to fetch') || message.includes('network') || message.includes('CORS')) {
+    return 'Network or CORS issue connecting to Firebase Storage. Please verify bucket setup and internet access.';
+  }
+
+  return message ? `Failed to upload image: ${message}` : 'Failed to upload image to Firebase Storage.';
+}
+
+/**
+ * Upload an image file to Firebase Storage using fast, atomic uploadBytes,
+ * stage-based progress updates, cancellation support, and explicit error handling.
  */
 export async function uploadImageToStorage(
   file: File | Blob,
@@ -204,120 +258,59 @@ export async function uploadImageToStorage(
     throw new Error('Authentication required: Please sign in with your Google account to upload photos.');
   }
 
-  // 1. Optimize image client-side first (ensuring WebP compression under size limits)
+  let isCancelled = false;
+  if (cancelRef) {
+    cancelRef.current = () => {
+      isCancelled = true;
+    };
+  }
+
+  // Stage 1: Client-side image resize and WebP compression
+  onProgress?.(15);
   const { blob } = await optimizeImage(file, options);
+  if (isCancelled) {
+    throw new Error('Image upload was cancelled by user.');
+  }
+  onProgress?.(45);
 
-  // 2. Perform Resumable Upload to Firebase Storage
-  return new Promise<UploadResult>((resolve, reject) => {
-    let uploadTask: UploadTask | null = null;
-    let timeoutTimer: NodeJS.Timeout | null = null;
-    let isSettled = false;
-    let userCancelled = false;
-
-    const cleanup = () => {
-      isSettled = true;
-      if (timeoutTimer) {
-        clearTimeout(timeoutTimer);
-        timeoutTimer = null;
-      }
-      if (cancelRef) {
-        cancelRef.current = undefined;
-      }
+  // Stage 2: Direct atomic upload using uploadBytes
+  try {
+    const fileRef = storageRef(storage, storagePath);
+    const contentType = blob.type || 'image/webp';
+    const metadata = {
+      contentType,
+      customMetadata: {
+        uploaderUid: currentUser.uid,
+        uploadedAt: new Date().toISOString(),
+      },
     };
 
-    try {
-      const fileRef = storageRef(storage, storagePath);
-      const contentType = blob.type || 'image/webp';
-      const metadata = {
-        contentType,
-        customMetadata: {
-          uploaderUid: currentUser.uid,
-          uploadedAt: new Date().toISOString(),
-        },
-      };
-
-      // Create resumable upload task
-      uploadTask = uploadBytesResumable(fileRef, blob, metadata);
-
-      // Register cancel handler
-      if (cancelRef) {
-        cancelRef.current = () => {
-          if (!isSettled) {
-            userCancelled = true;
-            if (uploadTask) {
-              try {
-                uploadTask.cancel();
-              } catch {}
-            }
-            cleanup();
-            reject(new Error('Image upload was cancelled by user.'));
-          }
-        };
-      }
-
-      // 45-second timeout guard for slow mobile uploads
-      timeoutTimer = setTimeout(() => {
-        if (!isSettled && !userCancelled) {
-          if (uploadTask) {
-            try {
-              uploadTask.cancel();
-            } catch {}
-          }
-          cleanup();
-          reject(new Error('Image upload timed out. Please check your network connection and try again.'));
-        }
-      }, 45000);
-
-      // Monitor progress, state changes, errors, and completion
-      uploadTask.on(
-        'state_changed',
-        (snapshot) => {
-          if (isSettled) return;
-          if (snapshot.totalBytes > 0) {
-            const percent = Math.min(99, Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100));
-            onProgress?.(percent);
-          }
-        },
-        (error: any) => {
-          if (isSettled) return;
-          cleanup();
-
-          if (userCancelled) {
-            reject(new Error('Image upload was cancelled.'));
-            return;
-          }
-
-          console.error('Firebase Storage upload failed:', error);
-          const errorMsg = error?.message || 'Storage upload failed';
-          reject(new Error(`Failed to upload image to Firebase Storage: ${errorMsg}`));
-        },
-        async () => {
-          if (isSettled) return;
-          try {
-            onProgress?.(100);
-            const downloadUrl = await getDownloadURL(uploadTask!.snapshot.ref);
-            cleanup();
-            resolve({
-              downloadUrl,
-              storagePath,
-            });
-          } catch (urlErr: any) {
-            cleanup();
-            console.error('Failed to retrieve storage download URL:', urlErr);
-            reject(new Error(`Failed to retrieve uploaded image URL from Firebase Storage: ${urlErr?.message || urlErr}`));
-          }
-        }
-      );
-    } catch (err: any) {
-      cleanup();
-      if (userCancelled) {
-        reject(new Error('Image upload was cancelled.'));
-        return;
-      }
-      console.error('Failed to initiate Firebase Storage upload:', err);
-      reject(new Error(`Failed to start image upload: ${err?.message || err}`));
+    onProgress?.(70);
+    const snapshot = await uploadBytes(fileRef, blob, metadata);
+    if (isCancelled) {
+      throw new Error('Image upload was cancelled by user.');
     }
-  });
+
+    // Stage 3: Retrieve permanent, authenticated download URL
+    onProgress?.(90);
+    const downloadUrl = await getDownloadURL(snapshot.ref);
+    onProgress?.(100);
+
+    return {
+      downloadUrl,
+      storagePath,
+    };
+  } catch (err: any) {
+    if (isCancelled || err?.message?.includes('cancelled')) {
+      throw new Error('Image upload was cancelled by user.');
+    }
+    console.error('Firebase Storage upload failed:', err);
+    throw new Error(formatStorageError(err));
+  } finally {
+    if (cancelRef) {
+      cancelRef.current = undefined;
+    }
+  }
 }
 
 /**
@@ -366,8 +359,7 @@ export async function uploadStorePhoto(
   const validation = validateImageFile(file);
   if (!validation.valid) throw new Error(validation.error);
 
-  const targetId = uid;
-  const path = `stores/${targetId}/store-photo_${Date.now()}`;
+  const path = `stores/${storeId}/store-photo_${Date.now()}`;
   return uploadImageToStorage(
     file,
     path,
@@ -383,7 +375,7 @@ export async function uploadStorePhoto(
 
 /**
  * Upload Seller Store Banner/Cover Photo
- * Path: stores/{uid}/banner
+ * Path: stores/{storeId}/banner
  */
 export async function uploadStoreBanner(
   file: File,
@@ -397,7 +389,7 @@ export async function uploadStoreBanner(
   const validation = validateImageFile(file);
   if (!validation.valid) throw new Error(validation.error);
 
-  const targetId = uid;
+  const targetId = storeId || uid;
   const path = `stores/${targetId}/banner_${Date.now()}`;
   return uploadImageToStorage(
     file,

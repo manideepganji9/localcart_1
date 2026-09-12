@@ -48,11 +48,11 @@ googleProvider.setCustomParameters({
   prompt: 'select_account',
 });
 
-// Initialize Firebase Storage with reasonable retry window (60s) to allow uploads to finish reliably
+// Initialize Firebase Storage with fail-fast retry window (10s)
 export const storage = getStorage(app);
 try {
-  storage.maxUploadRetryTime = 60000; // 60 seconds max retry for uploads
-  storage.maxOperationRetryTime = 60000; // 60 seconds max retry for storage operations
+  storage.maxUploadRetryTime = 10000; // 10 seconds max retry for uploads
+  storage.maxOperationRetryTime = 10000; // 10 seconds max retry for storage operations
 } catch {
   // Safe fallback
 }
