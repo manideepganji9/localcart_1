@@ -1000,7 +1000,14 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       throw new Error('Cannot create an order with an empty bag.');
     }
 
-    const idToken = await auth.currentUser?.getIdToken();
+    let idToken: string | undefined;
+    if (auth.currentUser) {
+      try {
+        idToken = await auth.currentUser.getIdToken(true);
+      } catch (tokenErr) {
+        idToken = await auth.currentUser.getIdToken();
+      }
+    }
     if (!idToken) {
       throw new Error('Authentication required. Please sign in to place an order.');
     }
